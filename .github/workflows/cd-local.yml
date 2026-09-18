@@ -1,0 +1,88 @@
+name: Local CD
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Local Kubernetes
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Verify environment
+        shell: powershell
+        run: |
+          docker info
+
+          $context = kubectl config current-context
+          Write-Host "Kubernetes context: $context"
+
+          if ($context -ne "docker-desktop") {
+            throw "Expected docker-desktop, got $context"
+          }
+
+          kubectl get nodes
+
+      - name: Build Docker image
+        shell: powershell
+        run: |
+          docker build -t model-service:validation .
+
+      - name: Apply Kubernetes manifests
+        shell: powershell
+        run: |
+          kubectl apply -f k8s/
+
+      - name: Restart deployment
+        shell: powershell
+        run: |
+          kubectl rollout restart deployment/model-service
+
+      - name: Wait for rollout
+        shell: powershell
+        run: |
+          kubectl rollout status deployment/model-service --timeout=120s
+
+      - name: Check Kubernetes state
+        shell: powershell
+        run: |
+          kubectl get deployment model-service
+          kubectl get pods -l app.kubernetes.io/name=model-service
+          kubectl get service model-service
+
+      - name: Smoke test
+        shell: powershell
+        run: |
+          $pf = Start-Process `
+            -FilePath "kubectl" `
+            -ArgumentList @(
+              "port-forward",
+              "service/model-service",
+              "18001:8000"
+            ) `
+            -PassThru
+
+          try {
+            Start-Sleep -Seconds 5
+
+            if ($pf.HasExited) {
+              throw "port-forward exited unexpectedly"
+            }
+
+            python scripts/smoke_test.py `
+              --base-url http://127.0.0.1:18001
+          }
+          finally {
+            if (!$pf.HasExited) {
+              Stop-Process -Id $pf.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
