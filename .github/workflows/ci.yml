@@ -1,4 +1,4 @@
-name: Basic CI
+name: CI
 
 on:
   pull_request:
@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -32,21 +34,5 @@ jobs:
           PYTHONPATH: src
         run: python -m pytest -q
 
-  build:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: test
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Build container image
-        run: docker build --tag model-service:ci .
-
-      - name: Scan image with Trivy
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: model-service:ci
-          format: table
-          exit-code: "0"
+  # Release builds and blocking scans live in release.yml. PR jobs never receive
+  # registry/cluster credentials or run on a privileged local runner.

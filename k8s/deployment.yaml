@@ -13,13 +13,16 @@ spec:
       labels:
         app.kubernetes.io/name: model-service
     spec:
+      imagePullSecrets:
+        - name: model-service-registry
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
       containers:
         - name: model-service
-          image: model-service:validation
+          # scripts/release.py replaces this locally before applying the manifest.
+          image: RELEASE_IMAGE_REQUIRED
           envFrom:
             - configMapRef:
                 name: model-service-config
