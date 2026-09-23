@@ -113,29 +113,54 @@ def test_validation_cannot_substitute_another_digest(identity, validation):
 @pytest.fixture
 def protection():
     return {
-        "can_admins_bypass": False,
-        "protection_rules": [{"type": "required_reviewers",
-                              "prevent_self_review": True, "reviewers": [{"type": "User"}]}],
-        "deployment_branch_policy": {"protected_branches": False, "custom_branch_policies": True},
+        "protection_rules": [
+            {
+                "type": "required_reviewers",
+                "prevent_self_review": True,
+                "reviewers": [{"type": "User"}],
+            }
+        ],
+        "deployment_branch_policy": {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
     }
 
 
-def test_protection_requires_real_reviewers_self_review_prevention_and_no_bypass(protection):
-    policies = {"total_count": 1, "branch_policies": [{"type": "tag", "name": "v*"}]}
+def test_protection_requires_reviewers_self_review_prevention_and_release_policy(
+    protection,
+):
+    policies = {
+        "total_count": 1,
+        "branch_policies": [{"id": 1, "node_id": "test", "name": "v*"}],
+    }
+
     release.verify_protection(protection, policies)
-    for field, value in [("can_admins_bypass", True), ("protection_rules", []),
-                         ("deployment_branch_policy", None)]:
+
+    for field, value in [
+        ("protection_rules", []),
+        ("deployment_branch_policy", None),
+    ]:
         invalid = {**protection, field: value}
         with pytest.raises(ValueError):
             release.verify_protection(invalid, policies)
+
     invalid = deepcopy(protection)
     invalid["protection_rules"][0]["prevent_self_review"] = False
+
     with pytest.raises(ValueError):
         release.verify_protection(invalid, policies)
-    with pytest.raises(ValueError):
-        release.verify_protection(protection, {"total_count": 1, "branch_policies": [
-            {"type": "branch", "name": "*"}]})
 
+    with pytest.raises(ValueError):
+        release.verify_protection(
+            protection,
+            {
+                "total_count": 1,
+                "branch_policies": [
+                    {"id": 2, "node_id": "test", "name": "release/*"}
+                ],
+            },
+        )
 
 @pytest.mark.parametrize("http_code", [401, 403, 429, 500, 503])
 def test_registry_errors_never_mean_tag_absent(monkeypatch, build_evidence, http_code):

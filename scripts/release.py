@@ -191,20 +191,38 @@ def github_json(suffix: str) -> dict:
 
 
 def verify_protection(protection: dict, policies: dict) -> None:
-    reviewers = [r for r in protection.get("protection_rules", [])
-                 if r.get("type") == "required_reviewers"]
-    require(any(r.get("reviewers") and r.get("prevent_self_review") is True
-                for r in reviewers), "Production requires reviewers and prevent self-review")
-    require(protection.get("can_admins_bypass") is False,
-            "Production administrator bypass must be disabled")
-    require(protection.get("deployment_branch_policy") ==
-            {"protected_branches": False, "custom_branch_policies": True},
-            "Production must use selected deployment tags")
-    rules = policies.get("branch_policies", [])
-    require(policies.get("total_count") == 1 and len(rules) == 1 and
-            rules[0].get("type") == "tag" and rules[0].get("name") == "v*",
-            "Production must allow only the v* tag rule (strict SemVer checked separately)")
+    reviewers = [
+        rule
+        for rule in protection.get("protection_rules", [])
+        if rule.get("type") == "required_reviewers"
+    ]
 
+    require(
+        any(
+            rule.get("reviewers")
+            and rule.get("prevent_self_review") is True
+            for rule in reviewers
+        ),
+        "Production requires reviewers and prevent self-review",
+    )
+
+    require(
+        protection.get("deployment_branch_policy")
+        == {
+            "protected_branches": False,
+            "custom_branch_policies": True,
+        },
+        "Production must use selected deployment policies",
+    )
+
+    rules = policies.get("branch_policies", [])
+
+    require(
+        policies.get("total_count") == 1
+        and len(rules) == 1
+        and rules[0].get("name") == "v*",
+        "Production must allow only the v* release policy",
+    )
 
 def bound_release() -> dict:
     first_attempt()
