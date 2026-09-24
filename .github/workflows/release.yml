@@ -1,0 +1,240 @@
+name: Release
+run-name: Release ${{ github.ref_name }} by ${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_reference:
+        description: Non-sensitive ticket/release reference; reviewer must verify approval
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize the complete release (including its approval wait) so neither the
+# shared validation target nor production can race another release.
+concurrency:
+  group: model-service-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Test, build once, push and scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      exact_deploy_image: ${{ steps.pin.outputs.exact_deploy_image }}
+    env:
+      JFROG_REGISTRY: ${{ vars.JFROG_REGISTRY || 'jfrog.vinsmartfuture.tech' }}
+      JFROG_IMAGE_PATH: ${{ vars.JFROG_IMAGE_PATH }}
+      TRIVY_BLOCKING_SEVERITIES: ${{ vars.TRIVY_BLOCKING_SEVERITIES }}
+      TRIVY_IGNORE_UNFIXED: ${{ vars.TRIVY_IGNORE_UNFIXED }}
+      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+          cache: pip
+      - name: Validate trigger, source, version, ticket reference and policy
+        id: identity
+        run: python scripts/release.py prepare
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Run all required tests
+        id: tests
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q --junitxml=evidence/tests.xml
+      - name: Refuse an existing release or build tag
+        env:
+          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
+        run: python scripts/release.py registry-check
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.JFROG_REGISTRY }}
+          username: ${{ secrets.JFROG_USERNAME }}
+          password: ${{ secrets.JFROG_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push the release image exactly once
+        id: image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64
+          # One platform manifest: its digest is also the runtime image ID.
+          provenance: false
+          tags: |
+            ${{ steps.identity.outputs.image_name }}:${{ steps.identity.outputs.image_tag }}
+            ${{ steps.identity.outputs.image_name }}:${{ steps.identity.outputs.release_version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.identity.outputs.release_version }}
+      - name: Fix the immutable deployment identity
+        id: pin
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: python scripts/release.py pin
+      - name: Scan the registry image and enforce the configured security policy
+        id: scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_USERNAME: ${{ secrets.JFROG_USERNAME }}
+          TRIVY_PASSWORD: ${{ secrets.JFROG_TOKEN }}
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_IGNOREFILE: /dev/null
+          TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
+        with:
+          version: v0.70.0
+          image-ref: ${{ steps.pin.outputs.exact_deploy_image }}
+          scanners: vuln
+          format: json
+          output: evidence/trivy.json
+          severity: ${{ env.TRIVY_BLOCKING_SEVERITIES }}
+          ignore-unfixed: ${{ env.TRIVY_IGNORE_UNFIXED }}
+          trivy-config: /dev/null
+          exit-code: "1"
+      - name: Record and verify build evidence
+        if: ${{ always() && steps.identity.outcome == 'success' }}
+        env:
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          PUSH_RESULT: ${{ steps.image.outcome }}
+          SCAN_RESULT: ${{ steps.scan.outcome }}
+        run: python scripts/release.py finalize-build
+      - name: Preserve build evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-build-${{ github.run_id }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  validation:
+    name: Local validation of the release digest
+    needs: build
+    uses: ./.github/workflows/cd-local.yml
+    with:
+      exact_deploy_image: ${{ needs.build.outputs.exact_deploy_image }}
+
+  candidate:
+    name: Verify evidence, ticket reference and production protection
+    needs: [build, validation]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-build-${{ github.run_id }}
+          path: evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - name: Create eligible candidate; ticket approval remains the human's responsibility
+        run: python scripts/release.py candidate
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: evidence/candidate.json
+          if-no-files-found: error
+          retention-days: 30
+
+  production:
+    name: Approve ticket, then deploy the validated digest
+    needs: [build, validation, candidate]
+    # Configure required reviewers BEFORE running. See MANUAL_ACTIONS.md.
+    environment:
+      name: production
+      url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    runs-on: [self-hosted, Linux, X64, model-service-production]
+    timeout-minutes: 15
+    env:
+      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      DEPLOYMENT_ENVIRONMENT: production
+      KUBE_CONTEXT: ${{ vars.PRODUCTION_KUBE_CONTEXT }}
+      KUBE_NAMESPACE: ${{ vars.PRODUCTION_NAMESPACE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-build-${{ github.run_id }}
+          path: evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-candidate-${{ github.run_id }}
+          path: evidence
+      - name: Deploy automatically after approval and verify the production workload
+        env:
+          # Available only after the production Environment protection passes.
+          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
+        run: python scripts/release.py deploy
+      - name: Preserve production evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-production-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/production.json
+          if-no-files-found: error
+          retention-days: 30
+
+  audit:
+    name: Record terminal release result
+    if: always()
+    needs: [build, validation, candidate, production]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - name: Gather evidence that exists (a rejected job never executes)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: evidence
+          merge-multiple: true
+      - name: Record success only when every prerequisite and production succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          TICKET_REFERENCE: ${{ inputs.ticket_reference }}
+        run: python scripts/release.py summary
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          # Final audit failures must retain their failure report too.
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
