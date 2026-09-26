@@ -1,0 +1,53 @@
+name: Demo - Human Approval Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket_reference:
+        description: "Demo ticket reference"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validation:
+    name: Validate release candidate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Run release flow tests
+        run: python -m pytest tests/unit/test_release_flow.py -q
+
+      - name: Candidate eligible
+        run: |
+          echo "Automatic validation passed."
+          echo "Ticket: ${{ inputs.ticket_reference }}"
+          echo "Candidate is waiting for human approval."
+
+  human-approval:
+    name: Human approval required
+    needs: validation
+
+    environment:
+      name: mentor-demo
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Approval received
+        run: |
+          echo "Human approval received."
+          echo "Deployment is now authorized."
