@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import subprocess
+from unittest.mock import Mock
 
 import pytest
 
@@ -97,17 +98,33 @@ def validation(identity):
             "checks": {k: "success" for k in ("apply", "rollout", "readiness", "image", "smoke")}}
 
 
+@pytest.fixture
+def eks_dev(validation):
+    return {**validation, "deployment_environment": "eks-dev"}
+
+
 @pytest.mark.parametrize("stage", ["apply", "rollout", "readiness", "image", "smoke"])
 def test_incomplete_validation_cannot_create_candidate(identity, validation, stage):
     validation["checks"][stage] = "failure"
     with pytest.raises(ValueError):
-        release.verify_validation(identity, validation)
+        release.verify_validation(identity, validation, "validation")
 
 
 def test_validation_cannot_substitute_another_digest(identity, validation):
     validation["image_digest"] = "sha256:" + "c" * 64
     with pytest.raises(ValueError, match="different release"):
-        release.verify_validation(identity, validation)
+        release.verify_validation(identity, validation, "validation")
+
+
+def test_eks_dev_cannot_create_candidate_for_another_digest(
+    build_evidence, github_run, eks_dev
+):
+    eks_dev["image_digest"] = "sha256:" + "c" * 64
+    eks_dev["exact_deploy_image"] = eks_dev["image_name"] + "@" + eks_dev["image_digest"]
+    release.write("eks-dev.json", eks_dev)
+    with pytest.raises(ValueError, match="different release"):
+        release.candidate()
+    assert not (build_evidence / "candidate.json").exists()
 
 
 @pytest.fixture
@@ -162,36 +179,108 @@ def test_protection_requires_reviewers_self_review_prevention_and_release_policy
             },
         )
 
-@pytest.mark.parametrize("http_code", [401, 403, 429, 500, 503])
-def test_registry_errors_never_mean_tag_absent(monkeypatch, build_evidence, http_code):
-    from urllib.error import HTTPError
-    monkeypatch.setenv("JFROG_USERNAME", "test-user")
-    monkeypatch.setenv("JFROG_TOKEN", "test-token")
 
-    def fail(*args, **kwargs):
-        raise HTTPError("https://registry.example.test", http_code, "test", {}, None)
+@pytest.fixture
+def aws_config(monkeypatch):
+    monkeypatch.setenv("AWS_ACCOUNT_ID", "123456789012")
+    monkeypatch.setenv("AWS_REGION", "us-east-2")
+    monkeypatch.setenv("ECR_REPOSITORY", "model-service")
 
-    monkeypatch.setattr(release, "urlopen", fail)
-    with pytest.raises(ValueError, match="Registry identity check failed"):
+
+def test_prepare_uses_configured_ecr_identity(
+    monkeypatch, build_evidence, github_run, aws_config, identity
+):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+    monkeypatch.setenv("GITHUB_REF", "refs/tags/" + identity["release_version"])
+    monkeypatch.setenv("TRIVY_BLOCKING_SEVERITIES", "HIGH,CRITICAL")
+    monkeypatch.setenv("TRIVY_IGNORE_UNFIXED", "false")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(build_evidence / "outputs"))
+    monkeypatch.setattr(release, "command", Mock(side_effect=[identity["git_sha"], ""]))
+    release.prepare()
+    data = release.read("release.json")
+    assert data["image_name"] == "123456789012.dkr.ecr.us-east-2.amazonaws.com/model-service"
+    assert data["image_tag"] == identity["image_tag"]
+    assert (build_evidence / "outputs").read_text().splitlines() == [
+        f'image_name={data["image_name"]}', f'image_tag={data["image_tag"]}',
+        f'release_version={data["release_version"]}',
+    ]
+
+
+@pytest.mark.parametrize("existing_tag_index", [0, 1])
+def test_ecr_existing_tag_cannot_be_reused(
+    monkeypatch, build_evidence, aws_config, existing_tag_index
+):
+    missing = subprocess.CompletedProcess([], 254, "", "ImageNotFoundException")
+    exists = subprocess.CompletedProcess([], 0, "{}", "")
+    run = Mock(side_effect=[missing] * existing_tag_index + [exists])
+    monkeypatch.setattr(release.subprocess, "run", run)
+    with pytest.raises(ValueError, match="identities cannot be reused"):
+        release.registry_check()
+    assert run.call_count == existing_tag_index + 1
+
+
+def test_ecr_only_image_not_found_allows_both_tags(
+    monkeypatch, build_evidence, aws_config, identity
+):
+    run = Mock(return_value=subprocess.CompletedProcess([], 254, "", "ImageNotFoundException"))
+    monkeypatch.setattr(release.subprocess, "run", run)
+    release.registry_check()
+    assert run.call_count == 2
+    for call, tag in zip(run.call_args_list, (identity["release_version"], identity["image_tag"])):
+        assert call.args[0] == [
+            "aws", "ecr", "describe-images", "--region", "us-east-2",
+            "--repository-name", "model-service", "--image-ids", f"imageTag={tag}",
+            "--output", "json",
+        ]
+
+
+@pytest.mark.parametrize("error", [
+    "AccessDeniedException", "RepositoryNotFoundException", "Unable to locate credentials",
+    "Could not connect to the endpoint URL", "Unknown AWS CLI error", "",
+])
+def test_ecr_errors_never_mean_tag_absent(monkeypatch, build_evidence, aws_config, error):
+    run = Mock(return_value=subprocess.CompletedProcess([], 254, "", error))
+    monkeypatch.setattr(release.subprocess, "run", run)
+    with pytest.raises(ValueError, match="ECR identity check failed"):
         release.registry_check()
 
 
-@pytest.mark.parametrize("stage", ["apply", "rollout", "wait", "smoke"])
-def test_native_failure_stops_deployment_and_records_failure(
-    monkeypatch, build_evidence, identity, stage
+@pytest.mark.parametrize("error", [FileNotFoundError(), subprocess.TimeoutExpired("aws", 30)])
+def test_ecr_cli_failure_is_closed(monkeypatch, build_evidence, aws_config, error):
+    monkeypatch.setattr(release.subprocess, "run", Mock(side_effect=error))
+    with pytest.raises(ValueError, match="ECR identity check failed"):
+        release.registry_check()
+
+
+@pytest.mark.parametrize("target", ["validation", "eks-dev", "production"])
+@pytest.mark.parametrize("has_pull_secret", [True, False])
+@pytest.mark.parametrize("stage", ["apply", "rollout", "wait", "smoke", None])
+def test_deployment_records_success_or_native_failure(
+    monkeypatch, build_evidence, identity, eks_dev, target, has_pull_secret, stage
 ):
-    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", "validation")
-    monkeypatch.setenv("KUBE_CONTEXT", "docker-desktop")
+    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", target)
+    monkeypatch.setenv("KUBE_CONTEXT", "docker-desktop" if target == "validation" else "test-cluster")
     monkeypatch.setenv("KUBE_NAMESPACE", "release-test")
+    if target == "production":
+        release.write("candidate.json", {**identity, "approval_state": "pending_human_review"})
+        release.write("eks-dev.json", eks_dev)
+        monkeypatch.setenv("KUBECONFIG_B64", "dGVzdA==")
+        monkeypatch.setenv("KUBECONFIG", "")
     monkeypatch.setattr(release, "bound_release", lambda: identity)
     calls = []
+    applied = []
+    pod_spec = {"containers": [{"name": "model-service", "image": identity["exact_deploy_image"]}]}
+    if has_pull_secret:
+        pod_spec["imagePullSecrets"] = [{"name": "model-service-registry"}]
 
     def fake_command(*args, **kwargs):
         calls.append(args)
         if stage in args or (stage == "smoke" and "scripts/smoke_test.py" in args):
             raise subprocess.CalledProcessError(1, args)
         if "set" in args:
-            return json.dumps({"spec": {"template": {"metadata": {}}}})
+            return json.dumps({"spec": {"template": {"metadata": {}, "spec": pod_spec}}})
+        if "apply" in args and "input" in kwargs:
+            applied.append(json.loads(kwargs["input"]))
         if "get" in args and "deployment" in args:
             return json.dumps({"spec": {"template": {"spec": {"containers": [
                 {"image": identity["exact_deploy_image"]}]}}}})
@@ -210,13 +299,28 @@ def test_native_failure_stops_deployment_and_records_failure(
     monkeypatch.setattr(release, "command", fake_command)
     monkeypatch.setattr(release.subprocess, "Popen", lambda *a, **k: Forward())
     monkeypatch.setattr(release.socket, "create_connection", lambda *a, **k: release.socket.socket())
-    with pytest.raises(subprocess.CalledProcessError):
+    if stage is None:
         release.deploy()
-    report = release.read("validation.json")
-    assert report["deployment_result"] == "failure"
-    assert report["checks"].get("smoke") != "success"
-    if stage != "smoke":
-        assert not any("scripts/smoke_test.py" in c for c in calls)
+    else:
+        with pytest.raises(subprocess.CalledProcessError):
+            release.deploy()
+    report = release.read(f"{target}.json")
+    assert report["deployment_environment"] == target
+    if stage is None:
+        release.verify_validation(identity, report, target)
+        assert report["approval_state"] == (
+            "environment_gate_passed" if target == "production" else "not_applicable"
+        )
+    else:
+        assert report["deployment_result"] == "failure"
+        assert report["checks"].get("smoke") != "success"
+        if stage != "smoke":
+            assert not any("scripts/smoke_test.py" in c for c in calls)
+    if stage != "apply":
+        expected_spec = deepcopy(pod_spec)
+        if target == "eks-dev":
+            expected_spec.pop("imagePullSecrets", None)
+        assert applied[0]["spec"]["template"]["spec"] == expected_spec
 
 
 def test_rerun_cannot_rebuild_or_deploy(monkeypatch):
@@ -250,42 +354,96 @@ def test_cross_job_identity_substitution_is_blocked(
         release.bound_release()
 
 
+@pytest.fixture
+def audit_evidence(monkeypatch, build_evidence, github_run, identity, eks_dev):
+    monkeypatch.setenv("NEEDS_JSON", json.dumps({
+        k: {"result": "success"} for k in ("build", "eks_dev", "candidate", "production")
+    }))
+    release.write("eks-dev.json", eks_dev)
+    release.write("candidate.json", {**identity, "approval_state": "pending_human_review"})
+    release.write("production.json", {**eks_dev, "deployment_environment": "production",
+                                      "approval_state": "environment_gate_passed"})
+    return build_evidence
+
+
+@pytest.mark.parametrize("job", ["build", "eks_dev", "candidate", "production"])
 @pytest.mark.parametrize("state", ["failure", "cancelled", "skipped"])
-def test_rejected_or_failed_production_never_records_release_success(
-    monkeypatch, build_evidence, github_run, state
+def test_rejected_or_failed_prerequisite_never_records_release_success(
+    monkeypatch, audit_evidence, job, state
 ):
-    needs = {k: {"result": "success"} for k in ("build", "validation", "candidate")}
-    needs["production"] = {"result": state}
+    needs = {k: {"result": "success"} for k in ("build", "eks_dev", "candidate", "production")}
+    needs[job] = {"result": state}
     monkeypatch.setenv("NEEDS_JSON", json.dumps(needs))
     release.summary()
     assert release.read("summary.json")["release_result"] == "not_successful"
 
 
-def test_success_requires_final_evidence(monkeypatch, build_evidence, github_run):
-    monkeypatch.setenv("NEEDS_JSON", json.dumps({
-        k: {"result": "success"} for k in ("build", "validation", "candidate", "production")
-    }))
+@pytest.mark.parametrize("filename", [
+    "release.json", "eks-dev.json", "candidate.json", "production.json", "trivy.json", "tests.xml",
+])
+def test_success_requires_final_evidence(audit_evidence, filename):
+    (audit_evidence / filename).unlink()
     with pytest.raises(ValueError, match="audit evidence"):
         release.summary()
     assert release.read("summary.json")["release_result"] == "not_successful"
 
 
-def test_complete_successful_audit(monkeypatch, build_evidence, github_run, identity, validation):
-    monkeypatch.setenv("NEEDS_JSON", json.dumps({
-        k: {"result": "success"} for k in ("build", "validation", "candidate", "production")
-    }))
-    release.write("validation.json", validation)
-    release.write("candidate.json", {**identity, "approval_state": "pending_human_review"})
-    release.write("production.json", {**validation, "deployment_environment": "production",
-                                      "approval_state": "environment_gate_passed"})
+def test_complete_successful_audit(audit_evidence):
     release.summary()
     assert release.read("summary.json")["release_result"] == "success"
 
 
-def test_protection_api_timeout_does_not_create_candidate(
-    monkeypatch, build_evidence, github_run, validation
+@pytest.mark.parametrize("field,value", [
+    ("deployment_environment", "validation"), ("deployment_result", "failure"),
+    ("image_digest", "sha256:" + "c" * 64),
+    *[("checks", {k: "failure"}) for k in ("apply", "rollout", "readiness", "image", "smoke")],
+])
+def test_invalid_eks_dev_evidence_blocks_candidate_production_and_audit(
+    monkeypatch, audit_evidence, eks_dev, field, value
 ):
-    release.write("validation.json", validation)
+    if field == "checks":
+        eks_dev["checks"].update(value)
+    else:
+        eks_dev[field] = value
+    release.write("eks-dev.json", eks_dev)
+    (audit_evidence / "candidate.json").unlink()
+    with pytest.raises(ValueError):
+        release.candidate()
+    assert not (audit_evidence / "candidate.json").exists()
+    release.write("candidate.json", {**release.read("release.json"),
+                                      "approval_state": "pending_human_review"})
+    with pytest.raises(ValueError, match="audit evidence"):
+        release.summary()
+    assert release.read("summary.json")["release_result"] == "not_successful"
+    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", "production")
+    with pytest.raises(ValueError):
+        release.deploy()
+    assert release.read("production.json")["deployment_result"] == "failure"
+
+
+@pytest.mark.parametrize("target,context", [
+    ("validation", "test-cluster"), ("eks-dev", "docker-desktop"), ("production", "docker-desktop"),
+])
+def test_deployment_context_rules_fail_before_kubectl(
+    monkeypatch, audit_evidence, target, context
+):
+    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", target)
+    monkeypatch.setenv("KUBE_CONTEXT", context)
+    monkeypatch.setenv("KUBE_NAMESPACE", "release-test")
+    monkeypatch.setenv("KUBECONFIG_B64", "dGVzdA==")
+    monkeypatch.setenv("KUBECONFIG", "")
+    command = Mock()
+    monkeypatch.setattr(release, "command", command)
+    with pytest.raises(ValueError, match="Docker Desktop"):
+        release.deploy()
+    command.assert_not_called()
+    assert release.read(f"{target}.json")["deployment_result"] == "failure"
+
+
+def test_protection_api_timeout_does_not_create_candidate(
+    monkeypatch, build_evidence, github_run, eks_dev
+):
+    release.write("eks-dev.json", eks_dev)
 
     def timeout(*args):
         raise TimeoutError("test timeout")
