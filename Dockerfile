@@ -1,10 +1,4 @@
-FROM python:3.12.14-slim
-
-# Apply available OpenSSL security fixes from the base image's Debian repositories.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade \
-        openssl libssl3t64 openssl-provider-legacy \
-    && rm -rf /var/lib/apt/lists/*
+FROM python:3.12.14-alpine3.24
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -13,9 +7,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY requirements-runtime.txt ./
-RUN python -m pip install --no-cache-dir --requirement requirements-runtime.txt \
-    && groupadd --system --gid 10001 app \
-    && useradd --system --uid 10001 --gid app --home-dir /nonexistent app
+# scikit-learn 1.7.2 has no musllinux wheel; retain only its runtime libraries.
+RUN apk add --no-cache libstdc++ libgomp \
+    && apk add --no-cache --virtual .build-deps g++ \
+    && python -m pip install --no-cache-dir --requirement requirements-runtime.txt \
+    && apk del .build-deps \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app -h /nonexistent app
 
 COPY --chown=app:app src/ ./src/
 COPY --chown=app:app artifacts/model.joblib ./artifacts/model.joblib
