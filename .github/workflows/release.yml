@@ -26,8 +26,9 @@ jobs:
     outputs:
       exact_deploy_image: ${{ steps.pin.outputs.exact_deploy_image }}
     env:
-      JFROG_REGISTRY: ${{ vars.JFROG_REGISTRY || 'jfrog.vinsmartfuture.tech' }}
-      JFROG_IMAGE_PATH: ${{ vars.JFROG_IMAGE_PATH }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
       TRIVY_BLOCKING_SEVERITIES: ${{ vars.TRIVY_BLOCKING_SEVERITIES }}
       TRIVY_IGNORE_UNFIXED: ${{ vars.TRIVY_IGNORE_UNFIXED }}
       TICKET_REFERENCE: ${{ inputs.ticket_reference }}
@@ -50,16 +51,16 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m pytest -q --junitxml=evidence/tests.xml
-      - name: Refuse an existing release or build tag
-        env:
-          JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
-          JFROG_TOKEN: ${{ secrets.JFROG_TOKEN }}
-        run: python scripts/release.py registry-check
-      - uses: docker/login-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ${{ env.JFROG_REGISTRY }}
-          username: ${{ secrets.JFROG_USERNAME }}
-          password: ${{ secrets.JFROG_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Refuse an existing release or build tag
+        run: python scripts/release.py registry-check
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v3
       - name: Build and push the release image exactly once
         id: image
@@ -85,8 +86,6 @@ jobs:
         id: scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
-          TRIVY_USERNAME: ${{ secrets.JFROG_USERNAME }}
-          TRIVY_PASSWORD: ${{ secrets.JFROG_TOKEN }}
           TRIVY_IMAGE_SRC: remote
           TRIVY_IGNOREFILE: /dev/null
           TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
@@ -116,16 +115,63 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  validation:
-    name: Local validation of the release digest
+  eks_dev:
+    name: Validate release digest on EKS dev
     needs: build
-    uses: ./.github/workflows/cd-local.yml
-    with:
-      exact_deploy_image: ${{ needs.build.outputs.exact_deploy_image }}
+    runs-on: [self-hosted, Windows, X64, model-service-validation]
+    timeout-minutes: 15
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
+      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
+      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      DEPLOYMENT_ENVIRONMENT: eks-dev
+      KUBE_CONTEXT: arn:aws:eks:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:cluster/${{ vars.EKS_CLUSTER_NAME }}
+      KUBE_NAMESPACE: ${{ vars.EKS_DEV_NAMESPACE }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Configure EKS kubeconfig
+        shell: powershell
+        run: |
+          aws sts get-caller-identity
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          aws eks update-kubeconfig `
+            --region $env:AWS_REGION `
+            --name $env:EKS_CLUSTER_NAME
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-build-${{ github.run_id }}
+          path: evidence
+      - name: Deploy exact digest and verify EKS dev
+        shell: powershell
+        run: |
+          python scripts/release.py deploy
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve EKS dev evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/eks-dev.json
+          if-no-files-found: error
+          retention-days: 30
 
   candidate:
     name: Verify evidence, ticket reference and production protection
-    needs: [build, validation]
+    needs: [build, eks_dev]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -147,7 +193,7 @@ jobs:
           path: evidence
       - uses: actions/download-artifact@v4
         with:
-          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence
       - name: Create eligible candidate; ticket approval remains the human's responsibility
         run: python scripts/release.py candidate
@@ -160,7 +206,7 @@ jobs:
 
   production:
     name: Approve ticket, then deploy the validated digest
-    needs: [build, validation, candidate]
+    needs: [build, eks_dev, candidate]
     # Configure required reviewers BEFORE running. See MANUAL_ACTIONS.md.
     environment:
       name: production
@@ -185,7 +231,7 @@ jobs:
           path: evidence
       - uses: actions/download-artifact@v4
         with:
-          name: release-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
           path: evidence
       - uses: actions/download-artifact@v4
         with:
@@ -208,7 +254,7 @@ jobs:
   audit:
     name: Record terminal release result
     if: always()
-    needs: [build, validation, candidate, production]
+    needs: [build, eks_dev, candidate, production]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 from datetime import datetime, timezone
-from urllib.error import HTTPError, URLError
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 import xml.etree.ElementTree as ET
 
@@ -103,8 +103,8 @@ def prepare() -> None:
     sha = command("git", "rev-parse", "HEAD")
     require(sha == env("GITHUB_SHA"), "Checkout does not match release SHA")
     command("git", "merge-base", "--is-ancestor", sha, "origin/main")
-    registry = env("JFROG_REGISTRY")
-    name = f'{registry}/{env("JFROG_IMAGE_PATH")}'
+    registry = f'{env("AWS_ACCOUNT_ID")}.dkr.ecr.{env("AWS_REGION")}.amazonaws.com'
+    name = f'{registry}/{env("ECR_REPOSITORY")}'
     severity = env("TRIVY_BLOCKING_SEVERITIES")
     require(set(severity.split(",")) <= {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"},
             "Configure a non-empty comma-separated Trivy severity list")
@@ -128,21 +128,21 @@ def prepare() -> None:
 
 def registry_check() -> None:
     data = read("release.json")
-    registry, path = data["image_name"].split("/", 1)
-    auth = base64.b64encode(
-        f'{env("JFROG_USERNAME")}:{env("JFROG_TOKEN")}'.encode()
-    ).decode()
-    # JFrog Docker V2 endpoint, using a scoped username/access-token pair.
-    # Only an explicit 404 means absent. Auth/network errors never mean absent.
+    region, repository = env("AWS_REGION"), env("ECR_REPOSITORY")
+    # Only ImageNotFoundException means absent. Other AWS errors fail closed.
     for tag in (data["release_version"], data["image_tag"]):
-        request = Request(f"https://{registry}/v2/{path}/manifests/{tag}", method="HEAD",
-                          headers={"Authorization": f"Basic {auth}",
-                                   "Accept": "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"})
         try:
-            with urlopen(request, timeout=30):
-                raise ValueError("Image tag already exists; release identities cannot be reused")
-        except HTTPError as exc:
-            require(exc.code == 404, f"Registry identity check failed (HTTP {exc.code})")
+            result = subprocess.run(
+                ["aws", "ecr", "describe-images", "--region", region,
+                 "--repository-name", repository, "--image-ids", f"imageTag={tag}",
+                 "--output", "json"],
+                check=False, capture_output=True, text=True, encoding="utf-8", timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise ValueError("ECR identity check failed") from None
+        require(result.returncode != 0,
+                "Image tag already exists; release identities cannot be reused")
+        require("ImageNotFoundException" in result.stderr, "ECR identity check failed")
 
 
 def pin() -> None:
@@ -236,10 +236,10 @@ def bound_release() -> dict:
     return data
 
 
-def verify_validation(data: dict, validation: dict) -> None:
+def verify_validation(data: dict, validation: dict, expected_environment: str) -> None:
     require(all(validation.get(k) == data[k] for k in IDENTITY_KEYS),
             "Validation used a different release identity")
-    require(validation.get("deployment_environment") == "validation" and
+    require(validation.get("deployment_environment") == expected_environment and
             validation.get("deployment_result") == "success" and
             all(validation.get("checks", {}).get(k) == "success"
                 for k in ("apply", "rollout", "readiness", "image", "smoke")),
@@ -248,7 +248,7 @@ def verify_validation(data: dict, validation: dict) -> None:
 
 def candidate() -> None:
     data = bound_release()
-    verify_validation(data, read("validation.json"))
+    verify_validation(data, read("eks-dev.json"), "eks-dev")
     verify_protection(github_json("environments/production"),
                       github_json("environments/production/deployment-branch-policies"))
     data.update(approval_state="pending_human_review", validation_result="success",
@@ -262,7 +262,7 @@ def candidate() -> None:
 
 def deploy() -> None:
     target = env("DEPLOYMENT_ENVIRONMENT")
-    require(target in {"validation", "production"}, "Unknown deployment environment")
+    require(target in {"validation", "eks-dev", "production"}, "Unknown deployment environment")
     report = {"deployment_environment": target, "deployment_result": "failure", "checks": {}}
     kube_file = None
     try:
@@ -274,7 +274,7 @@ def deploy() -> None:
                     "Production candidate identity mismatch")
             require(approved.get("approval_state") == "pending_human_review",
                     "Missing production candidate")
-            verify_validation(data, read("validation.json"))
+            verify_validation(data, read("eks-dev.json"), "eks-dev")
             # Only the protected production job calls this path. This string does
             # not purport to retrieve the reviewer identity or ticket approval.
             report["approval_state"] = "environment_gate_passed"
@@ -287,8 +287,8 @@ def deploy() -> None:
             report["approval_state"] = "not_applicable"
         context, namespace = env("KUBE_CONTEXT"), env("KUBE_NAMESPACE")
         require((target == "validation" and context == "docker-desktop") or
-                (target == "production" and context != "docker-desktop"),
-                "Docker Desktop is validation, never production")
+                (target in {"eks-dev", "production"} and context != "docker-desktop"),
+                "Docker Desktop is only for local validation")
         require(re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace) is not None,
                 "Invalid namespace")
         report.update(kubernetes_context=context, kubernetes_namespace=namespace)
@@ -308,6 +308,8 @@ def deploy() -> None:
             "release.model-service/git-sha": data["git_sha"],
             "release.model-service/workflow-run": data["workflow_run"],
         })
+        if target == "eks-dev":
+            rendered["spec"]["template"]["spec"].pop("imagePullSecrets", None)
         kube("apply", "-f", "k8s/configmap.yaml", "-f", "k8s/service.yaml")
         kube("apply", "-f", "-", input=json.dumps(rendered))
         report["checks"]["apply"] = "success"
@@ -386,11 +388,11 @@ def summary() -> None:
             for key in (*IDENTITY_KEYS, "security_result", "approval_state"):
                 if key in evidence:
                     data[key] = evidence[key]
-    if all(results.get(job) == "success" for job in ("build", "validation", "candidate", "production")):
+    if all(results.get(job) == "success" for job in ("build", "eks_dev", "candidate", "production")):
         try:
             built, deployed = read("release.json"), read("production.json")
             verify_build(built)
-            verify_validation(built, read("validation.json"))
+            verify_validation(built, read("eks-dev.json"), "eks-dev")
             candidate_evidence = read("candidate.json")
             require(all(deployed.get(k) == built[k] == candidate_evidence.get(k)
                         for k in IDENTITY_KEYS), "Final audit identity mismatch")
