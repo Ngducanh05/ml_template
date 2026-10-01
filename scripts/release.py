@@ -1,4 +1,4 @@
-"""Week 2 release identity, evidence and digest-only Kubernetes deployment.
+"""Week 3 runtime/artifact release identity and digest-pair deployment.
 
 Standard library only; no model-specific decisions. GitHub owns approval.
 """
@@ -24,10 +24,13 @@ EVIDENCE = Path("evidence")
 VERSION = r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
 DIGEST = r"sha256:[0-9a-f]{64}"
 IMAGE_NAME = r"[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9]+(?:[._/-][a-z0-9]+)*"
-IDENTITY_KEYS = (
-    "git_sha", "git_short_sha", "release_version", "image_name", "image_tag",
-    "image_digest", "exact_deploy_image", "workflow_run", "ticket_reference",
+STRING_IDENTITY_KEYS = (
+    "git_sha", "git_short_sha", "release_version",
+    "runtime_image_name", "runtime_digest", "exact_runtime_image",
+    "artifact_image_name", "artifact_tag", "artifact_digest", "exact_artifact_image",
+    "workflow_run", "ticket_reference",
 )
+IDENTITY_KEYS = ("schema_version", *STRING_IDENTITY_KEYS, "security_policy")
 
 
 def require(condition: bool, message: str) -> None:
@@ -77,21 +80,48 @@ def first_attempt() -> None:
             "Release reruns are disabled; use a new source commit and release version")
 
 
-def validate_identity(data: dict) -> None:
-    for key in IDENTITY_KEYS:
+def validate_identity(data: dict, *, allow_unpinned: bool = False) -> None:
+    require(data.get("schema_version") == 2, "Unsupported release schema")
+    unpinned = (allow_unpinned and data.get("artifact_digest") == ""
+                and data.get("exact_artifact_image") == "")
+    for key in STRING_IDENTITY_KEYS:
+        if unpinned and key in {"artifact_digest", "exact_artifact_image"}:
+            continue
         require(isinstance(data.get(key), str) and bool(data[key].strip()),
                 f"Missing release identity: {key}")
     require(re.fullmatch(r"[0-9a-f]{40}", data["git_sha"]) is not None, "Invalid SHA")
     require(data["git_short_sha"] == data["git_sha"][:12], "Short SHA mismatch")
     require(re.fullmatch(VERSION, data["release_version"]) is not None, "Invalid version")
-    require(re.fullmatch(IMAGE_NAME, data["image_name"]) is not None, "Invalid image name")
-    require(data["image_tag"] == f'm-{data["git_short_sha"]}', "Build tag mismatch")
-    require(re.fullmatch(DIGEST, data["image_digest"]) is not None, "Missing/invalid digest")
-    require(data["exact_deploy_image"] == f'{data["image_name"]}@{data["image_digest"]}',
-            "Deployment identity mismatch")
+    for kind in ("runtime", "artifact"):
+        require(re.fullmatch(IMAGE_NAME, data[f"{kind}_image_name"]) is not None,
+                f"Invalid {kind} image name")
+        if kind == "artifact" and unpinned:
+            continue
+        require(re.fullmatch(DIGEST, data[f"{kind}_digest"]) is not None,
+                f"Missing/invalid {kind} digest")
+        require(data[f"exact_{kind}_image"] ==
+                f'{data[f"{kind}_image_name"]}@{data[f"{kind}_digest"]}',
+                f"{kind} deployment identity mismatch")
+    require(data["artifact_tag"] == f'm-{data["git_short_sha"]}', "Build tag mismatch")
     require(len(data["ticket_reference"]) <= 256 and
             all(ord(c) >= 32 and ord(c) != 127 for c in data["ticket_reference"]),
             "Ticket must be a short non-sensitive single-line reference")
+    policy = data.get("security_policy")
+    require(isinstance(policy, dict), "Missing security policy")
+    severity = policy.get("blocking_severities")
+    require(isinstance(severity, str) and bool(severity) and
+            set(severity.split(",")) <= {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"},
+            "Configure a non-empty comma-separated Trivy severity list")
+    require(policy.get("ignore_unfixed") in {"true", "false"},
+            "TRIVY_IGNORE_UNFIXED must be true or false")
+
+
+def image_name(kind: str) -> str:
+    account, region = env("AWS_ACCOUNT_ID"), env("AWS_REGION")
+    require(re.fullmatch(r"[0-9]{12}", account) is not None, "Invalid AWS account ID")
+    require(re.fullmatch(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+", region) is not None,
+            "Invalid AWS region")
+    return f'{account}.dkr.ecr.{region}.amazonaws.com/{env(f"ECR_{kind.upper()}_REPOSITORY")}'
 
 
 def prepare() -> None:
@@ -103,65 +133,89 @@ def prepare() -> None:
     sha = command("git", "rev-parse", "HEAD")
     require(sha == env("GITHUB_SHA"), "Checkout does not match release SHA")
     command("git", "merge-base", "--is-ancestor", sha, "origin/main")
-    registry = f'{env("AWS_ACCOUNT_ID")}.dkr.ecr.{env("AWS_REGION")}.amazonaws.com'
-    name = f'{registry}/{env("ECR_REPOSITORY")}'
-    severity = env("TRIVY_BLOCKING_SEVERITIES")
-    require(set(severity.split(",")) <= {"UNKNOWN", "LOW", "MEDIUM", "HIGH", "CRITICAL"},
-            "Configure a non-empty comma-separated Trivy severity list")
-    unfixed = env("TRIVY_IGNORE_UNFIXED")
-    require(unfixed in {"true", "false"}, "TRIVY_IGNORE_UNFIXED must be true or false")
+    runtime_name, artifact_name = image_name("runtime"), image_name("artifact")
+    runtime_digest = env("RUNTIME_IMAGE_DIGEST")
     data = {
-        "schema_version": 1, "git_sha": sha, "git_short_sha": sha[:12],
-        "release_version": version, "image_name": name, "image_tag": f"m-{sha[:12]}",
-        "image_digest": "", "exact_deploy_image": "",
+        "schema_version": 2, "git_sha": sha, "git_short_sha": sha[:12],
+        "release_version": version,
+        "runtime_image_name": runtime_name, "runtime_digest": runtime_digest,
+        "exact_runtime_image": f"{runtime_name}@{runtime_digest}",
+        "artifact_image_name": artifact_name, "artifact_tag": f"m-{sha[:12]}",
+        "artifact_digest": "", "exact_artifact_image": "",
         "workflow_run": f'{env("GITHUB_SERVER_URL")}/{env("GITHUB_REPOSITORY")}/actions/runs/{env("GITHUB_RUN_ID")}',
         "ticket_reference": env("TICKET_REFERENCE"),
-        "security_policy": {"blocking_severities": severity, "ignore_unfixed": unfixed},
+        "security_policy": {"blocking_severities": env("TRIVY_BLOCKING_SEVERITIES"),
+                            "ignore_unfixed": env("TRIVY_IGNORE_UNFIXED")},
         "timestamp": timestamp(),
     }
-    # Validate all fields before publishing anything, using a temporary digest.
-    validate_identity({**data, "image_digest": "sha256:" + "0" * 64,
-                       "exact_deploy_image": name + "@sha256:" + "0" * 64})
+    validate_identity(data, allow_unpinned=True)
     write("release.json", data)
-    output(image_name=name, image_tag=data["image_tag"], release_version=version)
+    output(artifact_image_name=artifact_name, artifact_tag=data["artifact_tag"],
+           exact_runtime_image=data["exact_runtime_image"], release_version=version)
 
 
 def registry_check() -> None:
     data = read("release.json")
-    region, repository = env("AWS_REGION"), env("ECR_REPOSITORY")
-    # Only ImageNotFoundException means absent. Other AWS errors fail closed.
-    for tag in (data["release_version"], data["image_tag"]):
+    validate_identity(data, allow_unpinned=True)
+    verify_run_identity(data)
+    for kind in ("runtime", "artifact"):
+        require(data[f"{kind}_image_name"] == image_name(kind), "ECR repository identity changed")
+    require(data["runtime_digest"] == env("RUNTIME_IMAGE_DIGEST"), "Runtime digest changed")
+
+    def describe(kind: str, image_id: str) -> subprocess.CompletedProcess:
         try:
-            result = subprocess.run(
-                ["aws", "ecr", "describe-images", "--region", region,
-                 "--repository-name", repository, "--image-ids", f"imageTag={tag}",
+            return subprocess.run(
+                ["aws", "ecr", "describe-images", "--region", env("AWS_REGION"),
+                 "--registry-id", env("AWS_ACCOUNT_ID"),
+                 "--repository-name", env(f"ECR_{kind.upper()}_REPOSITORY"),
+                 "--image-ids", image_id,
                  "--output", "json"],
                 check=False, capture_output=True, text=True, encoding="utf-8", timeout=30,
             )
         except (OSError, subprocess.SubprocessError):
             raise ValueError("ECR identity check failed") from None
+
+    # Only the AWS ImageNotFoundException means an unused artifact tag.
+    for tag in (data["release_version"], data["artifact_tag"]):
+        result = describe("artifact", f"imageTag={tag}")
         require(result.returncode != 0,
                 "Image tag already exists; release identities cannot be reused")
-        require("ImageNotFoundException" in result.stderr, "ECR identity check failed")
+        require(re.search(r"^An error occurred \(ImageNotFoundException\) when calling the "
+                          r"DescribeImages operation:", result.stderr.strip()) is not None,
+                "ECR identity check failed")
+    result = describe("runtime", f'imageDigest={data["runtime_digest"]}')
+    require(result.returncode == 0, "ECR runtime digest lookup failed")
+    details = json.loads(result.stdout).get("imageDetails", [])
+    require(len(details) == 1 and details[0].get("imageDigest") == data["runtime_digest"]
+            and details[0].get("repositoryName") == env("ECR_RUNTIME_REPOSITORY")
+            and details[0].get("registryId") == env("AWS_ACCOUNT_ID"),
+            "ECR runtime digest/repository identity mismatch")
 
 
 def pin() -> None:
     data = read("release.json")
-    data["image_digest"] = env("IMAGE_DIGEST")
-    data["exact_deploy_image"] = f'{data["image_name"]}@{data["image_digest"]}'
+    validate_identity(data, allow_unpinned=True)
+    verify_run_identity(data)
+    require(data["artifact_digest"] == "" and data["exact_artifact_image"] == "",
+            "Artifact digest is already pinned")
+    data["artifact_digest"] = env("ARTIFACT_IMAGE_DIGEST")
+    data["exact_artifact_image"] = f'{data["artifact_image_name"]}@{data["artifact_digest"]}'
     validate_identity(data)
     write("release.json", data)
-    output(exact_deploy_image=data["exact_deploy_image"])
+    output(exact_runtime_image=data["exact_runtime_image"],
+           exact_artifact_image=data["exact_artifact_image"])
 
 
 def verify_build(data: dict) -> None:
     validate_identity(data)
-    require(data.get("tests_result") == "success" and data.get("push_result") == "success"
-            and data.get("security_result") == "success", "Release prerequisites did not pass")
-    scan = read("trivy.json")
-    require(scan.get("ArtifactName") == data["exact_deploy_image"] and
-            isinstance(scan.get("Results"), list) and bool(scan["Results"]),
-            "Missing scan evidence for the exact deployment image")
+    require(all(data.get(key) == "success" for key in (
+        "tests_result", "artifact_push_result", "runtime_scan_result", "artifact_scan_result",
+    )), "Release prerequisites did not pass")
+    for kind in ("runtime", "artifact"):
+        scan = read(f"trivy-{kind}.json")
+        require(scan.get("ArtifactName") == data[f"exact_{kind}_image"] and
+                isinstance(scan.get("Results"), list) and bool(scan["Results"]),
+                f"Missing {kind} scan evidence for the exact image")
     suites = ET.parse(EVIDENCE / "tests.xml").getroot()
     require(sum(int(s.get("tests", "0")) for s in suites.iter("testsuite")) > 0,
             "Missing test evidence")
@@ -172,8 +226,9 @@ def verify_build(data: dict) -> None:
 def finalize_build() -> None:
     data = read("release.json")
     data.update(tests_result=os.environ.get("TEST_RESULT", "not_run"),
-                push_result=os.environ.get("PUSH_RESULT", "not_run"),
-                security_result=os.environ.get("SCAN_RESULT", "not_run"),
+                artifact_push_result=os.environ.get("ARTIFACT_PUSH_RESULT", "not_run"),
+                runtime_scan_result=os.environ.get("RUNTIME_SCAN_RESULT", "not_run"),
+                artifact_scan_result=os.environ.get("ARTIFACT_SCAN_RESULT", "not_run"),
                 timestamp=timestamp())
     write("release.json", data)
     verify_build(data)
@@ -224,15 +279,26 @@ def verify_protection(protection: dict, policies: dict) -> None:
         "Production must allow only the v* release policy",
     )
 
-def bound_release() -> dict:
+
+def verify_run_identity(data: dict) -> None:
     first_attempt()
-    data = read("release.json")
-    verify_build(data)
     require(data["git_sha"] == env("GITHUB_SHA"), "Evidence/source SHA mismatch")
-    require(data["exact_deploy_image"] == env("EXACT_DEPLOY_IMAGE"), "Digest changed between jobs")
+    require(data["release_version"] == env("GITHUB_REF_NAME") and
+            env("GITHUB_REF") == f'refs/tags/{data["release_version"]}',
+            "Evidence/release version mismatch")
+    require(data["ticket_reference"] == env("TICKET_REFERENCE"), "Evidence/ticket mismatch")
     require(data["workflow_run"] ==
             f'{env("GITHUB_SERVER_URL")}/{env("GITHUB_REPOSITORY")}/actions/runs/{env("GITHUB_RUN_ID")}',
             "Evidence belongs to a different release run")
+
+
+def bound_release() -> dict:
+    data = read("release.json")
+    verify_build(data)
+    verify_run_identity(data)
+    for kind in ("runtime", "artifact"):
+        require(data[f"exact_{kind}_image"] == env(f"EXACT_{kind.upper()}_IMAGE"),
+                f"{kind} digest changed between jobs")
     return data
 
 
@@ -258,6 +324,52 @@ def candidate() -> None:
     write("candidate.json", data)
     # JSON avoids rendering a user-supplied ticket as Markdown/HTML.
     print(json.dumps(data, indent=2, sort_keys=True))
+
+
+def named(items: list, name: str) -> dict:
+    matches = [item for item in items if item.get("name") == name]
+    require(len(matches) == 1, f"Missing or ambiguous container: {name}")
+    return matches[0]
+
+
+def verify_images(data: dict, spec: dict) -> None:
+    for kind, group, name in (("runtime", "containers", "model-service"),
+                              ("artifact", "initContainers", "model-artifact")):
+        require(named(spec.get(group, []), name).get("image") == data[f"exact_{kind}_image"],
+                f"{kind} image changed")
+    require(all(c.get("image") not in {"RUNTIME_IMAGE_REQUIRED", "ARTIFACT_IMAGE_REQUIRED"}
+                for group in ("containers", "initContainers") for c in spec.get(group, [])),
+            "Unrendered image placeholder")
+
+
+def verify_pods(data: dict, pods: list) -> None:
+    pods = [p for p in pods if not p.get("metadata", {}).get("deletionTimestamp")]
+    require(bool(pods), "No running release pods")
+    for pod in pods:
+        verify_images(data, pod["spec"])
+        status = pod.get("status", {})
+        require(status.get("phase") == "Running" and any(
+            c.get("type") == "Ready" and c.get("status") == "True"
+            for c in status.get("conditions", [])
+        ), "Release pod is not Ready")
+        for kind, group, name in (("runtime", "containerStatuses", "model-service"),
+                                  ("artifact", "initContainerStatuses", "model-artifact")):
+            state = named(status.get(group, []), name)
+            # Retain the existing exact manifest digest check for both images.
+            # An index/config digest is not silently accepted as an equivalent image.
+            image_id = state.get("imageID", "")
+            for prefix in ("docker-pullable://", "docker://", "containerd://"):
+                if image_id.startswith(prefix):
+                    image_id = image_id.removeprefix(prefix)
+                    break
+            require(image_id == data[f"{kind}_digest"] or
+                    image_id == data[f"exact_{kind}_image"],
+                    f"Running {kind} imageID does not match approved digest")
+            if kind == "runtime":
+                require(state.get("ready") is True, "Runtime container is not Ready")
+            else:
+                require(state.get("state", {}).get("terminated", {}).get("exitCode") == 0,
+                        "Artifact init container did not complete successfully")
 
 
 def deploy() -> None:
@@ -301,8 +413,10 @@ def deploy() -> None:
         # Render first, then apply: the placeholder image is never sent to the API.
         rendered = json.loads(command(
             "kubectl", "set", "image", "--local", "-f", "k8s/deployment.yaml",
-            f'model-service={data["exact_deploy_image"]}', "-o", "json",
+            f'model-service={data["exact_runtime_image"]}',
+            f'model-artifact={data["exact_artifact_image"]}', "-o", "json",
         ))
+        verify_images(data, rendered["spec"]["template"]["spec"])
         rendered["spec"]["template"]["metadata"].setdefault("annotations", {}).update({
             "release.model-service/version": data["release_version"],
             "release.model-service/git-sha": data["git_sha"],
@@ -320,18 +434,10 @@ def deploy() -> None:
              "app.kubernetes.io/name=model-service", "--timeout=120s")
         report["checks"]["readiness"] = "success"
         deployment = json.loads(kube("get", "deployment", "model-service", "-o", "json"))
-        require(deployment["spec"]["template"]["spec"]["containers"][0]["image"] ==
-                data["exact_deploy_image"], "Deployment image changed")
+        verify_images(data, deployment["spec"]["template"]["spec"])
         pods = json.loads(kube("get", "pods", "-l", "app.kubernetes.io/name=model-service",
                                "-o", "json"))["items"]
-        pods = [p for p in pods if not p["metadata"].get("deletionTimestamp")]
-        require(bool(pods), "No running release pods")
-        for pod in pods:
-            container = next(c for c in pod["spec"]["containers"] if c["name"] == "model-service")
-            state = next(c for c in pod["status"]["containerStatuses"] if c["name"] == "model-service")
-            require(container["image"] == data["exact_deploy_image"] and state["ready"]
-                    and state["imageID"].endswith(data["image_digest"]),
-                    "Running pod is not ready on the approved digest")
+        verify_pods(data, pods)
         report["checks"]["image"] = "success"
         with socket.socket() as available:
             available.bind(("127.0.0.1", 0))
@@ -385,17 +491,18 @@ def summary() -> None:
     for filename in ("release.json", "production.json"):
         if (EVIDENCE / filename).exists():
             evidence = read(filename)
-            for key in (*IDENTITY_KEYS, "security_result", "approval_state"):
+            for key in (*IDENTITY_KEYS, "runtime_scan_result", "artifact_scan_result", "approval_state"):
                 if key in evidence:
                     data[key] = evidence[key]
     if all(results.get(job) == "success" for job in ("build", "eks_dev", "candidate", "production")):
         try:
-            built, deployed = read("release.json"), read("production.json")
-            verify_build(built)
+            built, deployed = bound_release(), read("production.json")
             verify_validation(built, read("eks-dev.json"), "eks-dev")
             candidate_evidence = read("candidate.json")
             require(all(deployed.get(k) == built[k] == candidate_evidence.get(k)
                         for k in IDENTITY_KEYS), "Final audit identity mismatch")
+            require(candidate_evidence.get("approval_state") == "pending_human_review",
+                    "Missing eligible candidate")
             require(deployed.get("deployment_result") == "success" and
                     deployed.get("deployment_environment") == "production" and
                     deployed.get("approval_state") == "environment_gate_passed" and

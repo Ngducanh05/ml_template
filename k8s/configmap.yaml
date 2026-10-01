@@ -3,6 +3,6 @@ kind: ConfigMap
 metadata:
   name: model-service-config
 data:
-  MODEL_PATH: /app/artifacts/model.joblib
+  MODEL_PATH: /models/model.joblib
   MODEL_NAME: iris-demo-v1
   LOG_LEVEL: INFO
