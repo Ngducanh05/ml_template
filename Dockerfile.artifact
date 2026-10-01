@@ -1,5 +1,7 @@
 FROM alpine:3.24
 
+RUN mkdir -p /artifact && chmod 0755 /artifact
+
 # The trusted bundle already contains the model and its metadata contract.
 COPY --chmod=0444 artifacts/model.joblib /artifact/model.joblib
 
