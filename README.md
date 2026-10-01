@@ -3,8 +3,11 @@
 Project demo dùng để xây dựng và hiểu flow triển khai một ML model từ một
 model artifact có sẵn thành model service chạy trên Kubernetes.
 
-Week 1 baseline đã hoàn thành. Scope hiện tại là Week 2: Security, Versioning,
-Audit, Ticket/Approval và Automatic Rollout. Flow serving Week 1 được giữ nguyên:
+The active Week 3 release reuses an approved runtime image digest and builds only
+the model artifact image. Both exact images are scanned, validated on EKS dev,
+and promoted unchanged after human production approval. See the current
+[release configuration](MANUAL_ACTIONS.md#week-3-dual-image-release-configuration).
+The Week 1 serving flow is unchanged; later Week 2 sections are historical.
 
 ```text
 Existing Model Artifact
@@ -536,9 +539,59 @@ Application startup complete
 docker stop ml-template-validation
 ```
 
+## Runtime/artifact packaging
+
+The existing combined `Dockerfile` remains available for developer checks.
+The active release uses independent runtime and artifact images:
+
+- `Dockerfile.runtime` uses the same Python, dependencies, non-root user and
+  single Uvicorn worker, with no bundled model. Set `MODEL_PATH` to an externally
+  supplied file; the application continues to load it directly from the filesystem.
+- `Dockerfile.artifact` packages the existing trusted bundle unchanged at
+  `/artifact/model.joblib`. Its default command copies it to `/models/model.joblib`
+  with read permissions for the runtime user. Mount a writable volume at `/models`
+  for this handoff, then mount the same volume read-only in the runtime container.
+
+Artifact `model_version` is an identity, such as `iris-demo-v1` or `iris-demo-v2`.
+It must start with an ASCII letter or digit and contain only ASCII letters, digits,
+`.`, `_`, `+` or `-`. It is retained in the artifact contract and readiness log.
+The supported Iris features, targets, units, signatures, batch bounds, pipeline,
+class mapping and sklearn checks remain strict. Artifact Python metadata still
+requires `3.12.14`; a different runtime Python version still produces a warning.
+
+Local PowerShell verification (use an unused container name and port):
+
+```powershell
+docker build -f Dockerfile.runtime -t model-runtime:test .
+docker build -f Dockerfile.artifact -t model-artifact:test .
+$modelVolume = docker volume create
+try {
+  docker run --rm --mount "type=volume,source=$modelVolume,target=/models" model-artifact:test
+  docker run --rm -d --name ml-template-split-validation `
+    -p 18001:8000 -e MODEL_PATH=/models/model.joblib `
+    --mount "type=volume,source=$modelVolume,target=/models,readonly" model-runtime:test
+  # After the service reports application startup complete:
+  docker logs ml-template-split-validation
+  python scripts/smoke_test.py --base-url http://127.0.0.1:18001
+} finally {
+  docker rm -f ml-template-split-validation
+  docker volume rm $modelVolume
+}
+```
+
+These are optional local packaging checks. Normal model releases never build
+`Dockerfile.runtime`: `RUNTIME_IMAGE_DIGEST` selects an existing approved runtime.
+One `Dockerfile.artifact` build/push packages `artifacts/model.joblib`. Schema-v2
+release evidence binds `exact_runtime_image` and `exact_artifact_image` together
+with source SHA, release version, workflow run, ticket reference and scan policy.
+`MODEL_NAME` and artifact model metadata are not immutable release identity.
+
 ---
 
 # 11. Kubernetes
+
+The following Docker Desktop notes describe the local baseline. The active
+release validates on EKS dev; no manual cluster commands are needed per release.
 
 Môi trường hiện tại:
 
@@ -597,12 +650,15 @@ Deployment quản lý Pod của model service.
 Release deployment dùng identity lấy từ `release.json`:
 
 ```text
-<configured JFrog image name>@sha256:<digest>
+exact_runtime_image  = <configured ECR runtime image name>@sha256:<digest>
+exact_artifact_image = <configured ECR artifact image name>@sha256:<digest>
 ```
 
-`RELEASE_IMAGE_REQUIRED` trong manifest là placeholder. Release helper render
-image trước khi apply. Không apply trực tiếp placeholder. Kubernetes cần
-`model-service-registry` imagePullSecret trong namespace đích.
+`RUNTIME_IMAGE_REQUIRED` and `ARTIFACT_IMAGE_REQUIRED` are local-only placeholders.
+The helper renders and checks both before apply. `model-artifact` initializes the
+shared `emptyDir` at `/models`; `model-service` mounts it read-only with
+`MODEL_PATH=/models/model.joblib`. Pod UID/GID and fsGroup are 10001. EKS dev omits
+imagePullSecrets; production retains `model-service-registry`.
 
 Deployment cấu hình:
 
@@ -629,14 +685,15 @@ Service route traffic tới Pod dựa trên label selector.
 
 # 13. Deploy Kubernetes
 
-Week 2 deployment is driven by **Actions > Release > Run workflow** on a release
-tag. The reusable `cd-local.yml` consumes the scanned release evidence and image
-digest from that run. It does not build an image.
+Deployment is driven by **Actions > Release > Run workflow** on an authorized
+release tag with a ticket reference. `release.yml` runs build -> EKS dev ->
+candidate -> protected production -> audit. `cd-local.yml` remains an optional
+local validation helper with dual-image inputs; the active release does not call it.
 
 The helper renders `k8s/deployment.yaml` with `kubectl set image --local`, applies
-the rendered manifest, waits for rollout and readiness, checks the running pod
-image digest, and invokes the existing smoke test. It explicitly targets the
-configured namespace and `docker-desktop` context for local validation.
+the rendered manifest, waits for rollout and readiness, checks both Deployment
+and Pod image identities, checks successful artifact initialization, and invokes
+the existing smoke test through a temporary port-forward with automatic cleanup.
 
 Complete [MANUAL_ACTIONS.md](MANUAL_ACTIONS.md) before running a release.
 Docker Desktop is validation only. Production requires a separate real target.
@@ -644,6 +701,8 @@ Docker Desktop is validation only. Production requires a separate real target.
 ---
 
 # 14. Test Model Service trên Kubernetes
+
+Optional manual troubleshooting only; normal releases perform this automatically.
 
 Port-forward Kubernetes Service:
 
@@ -736,7 +795,11 @@ về desired state mới.
 
 ---
 
-# 16. Week 2 controlled release flow
+# 16. Historical Week 2 controlled release flow
+
+Historical context only. The single-image JFrog/Docker Desktop flow below has
+been superseded by the Week 3 ECR/EKS digest-pair workflow described above and in
+the current section of [MANUAL_ACTIONS.md](MANUAL_ACTIONS.md).
 
 **Confirmed by the mentor:** "Ticket will be the gate for production. It must be
 approved before it can go to production."
@@ -871,7 +934,7 @@ start a newer one. GitHub may replace an older pending run when more runs are
 queued; this is serialization, not a guaranteed FIFO release queue. Only dispatch
 one candidate at a time.
 
-# 17. Setup, limitations and Week 2 boundaries
+# 17. Historical setup, limitations and Week 2 boundaries
 
 Follow [MANUAL_ACTIONS.md](MANUAL_ACTIONS.md) for JFrog configuration, security
 policy variables, protected release tags, reviewers, Kubernetes pull secrets,

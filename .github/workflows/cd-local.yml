@@ -3,7 +3,13 @@ name: Local validation
 on:
   workflow_call:
     inputs:
-      exact_deploy_image:
+      exact_runtime_image:
+        required: true
+        type: string
+      exact_artifact_image:
+        required: true
+        type: string
+      ticket_reference:
         required: true
         type: string
 
@@ -19,7 +25,9 @@ jobs:
       group: model-service-local-validation
       cancel-in-progress: false
     env:
-      EXACT_DEPLOY_IMAGE: ${{ inputs.exact_deploy_image }}
+      EXACT_RUNTIME_IMAGE: ${{ inputs.exact_runtime_image }}
+      EXACT_ARTIFACT_IMAGE: ${{ inputs.exact_artifact_image }}
+      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
       DEPLOYMENT_ENVIRONMENT: validation
       KUBE_CONTEXT: docker-desktop
       KUBE_NAMESPACE: ${{ vars.VALIDATION_NAMESPACE }}
@@ -34,7 +42,7 @@ jobs:
         with:
           name: release-build-${{ github.run_id }}
           path: evidence
-      - name: Deploy the scanned digest, verify rollout, readiness and smoke test
+      - name: Deploy the scanned pair, verify rollout, readiness and smoke test
         shell: powershell
         run: |
           python scripts/release.py deploy

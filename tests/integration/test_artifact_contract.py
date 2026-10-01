@@ -1,14 +1,46 @@
 from pathlib import Path
 
 import joblib
+import pytest
+from fastapi.testclient import TestClient
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from model_service.main import create_app
 from model_service.model.adapter import SklearnJoblibAdapter
 
 
 ARTIFACT_PATH = Path(__file__).resolve().parents[2] / "artifacts" / "model.joblib"
+
+
+@pytest.mark.parametrize("model_version", ["iris-demo-v1", "iris-demo-v2"])
+def test_app_serves_external_artifact_from_model_path(
+    tmp_path: Path, monkeypatch, model_version: str
+) -> None:
+    artifact = joblib.load(ARTIFACT_PATH)
+    artifact["metadata"]["model_version"] = model_version
+    external_path = tmp_path / "model.joblib"
+    joblib.dump(artifact, external_path)
+    monkeypatch.setenv("MODEL_PATH", str(external_path))
+    # Startup must resolve the configured path independently of the working directory.
+    monkeypatch.chdir(tmp_path)
+
+    with TestClient(create_app()) as client:
+        for path, status in [("/health/live", "live"), ("/health/ready", "ready")]:
+            response = client.get(path)
+            assert response.status_code == 200
+            assert response.json() == {"status": status}
+        instance = {
+            "sepal_length": 5.1,
+            "sepal_width": 3.5,
+            "petal_length": 1.4,
+            "petal_width": 0.2,
+        }
+        response = client.post("/api/v1/predict", json={"instances": [instance]})
+
+    assert response.status_code == 200
+    assert response.json() == {"predictions": ["setosa"]}
 
 
 def test_artifact_exposes_the_verified_contract() -> None:

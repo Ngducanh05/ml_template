@@ -20,15 +20,18 @@ concurrency:
 
 jobs:
   build:
-    name: Test, build once, push and scan
+    name: Test, build artifact once and scan both images
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
-      exact_deploy_image: ${{ steps.pin.outputs.exact_deploy_image }}
+      exact_runtime_image: ${{ steps.pin.outputs.exact_runtime_image }}
+      exact_artifact_image: ${{ steps.pin.outputs.exact_artifact_image }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      ECR_RUNTIME_REPOSITORY: ${{ vars.ECR_RUNTIME_REPOSITORY }}
+      ECR_ARTIFACT_REPOSITORY: ${{ vars.ECR_ARTIFACT_REPOSITORY }}
+      RUNTIME_IMAGE_DIGEST: ${{ vars.RUNTIME_IMAGE_DIGEST }}
       TRIVY_BLOCKING_SEVERITIES: ${{ vars.TRIVY_BLOCKING_SEVERITIES }}
       TRIVY_IGNORE_UNFIXED: ${{ vars.TRIVY_IGNORE_UNFIXED }}
       TICKET_REFERENCE: ${{ inputs.ticket_reference }}
@@ -57,33 +60,35 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Refuse an existing release or build tag
+      - name: Require the runtime digest and unused artifact release/build tags
         run: python scripts/release.py registry-check
       - name: Login to Amazon ECR
         uses: aws-actions/amazon-ecr-login@v2
       - uses: docker/setup-buildx-action@v3
-      - name: Build and push the release image exactly once
+      - name: Build and push the artifact image exactly once
         id: image
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: Dockerfile.artifact
           push: true
           platforms: linux/amd64
-          # One platform manifest: its digest is also the runtime image ID.
+          # One platform manifest: its digest is also the init container image ID.
           provenance: false
           tags: |
-            ${{ steps.identity.outputs.image_name }}:${{ steps.identity.outputs.image_tag }}
-            ${{ steps.identity.outputs.image_name }}:${{ steps.identity.outputs.release_version }}
+            ${{ steps.identity.outputs.artifact_image_name }}:${{ steps.identity.outputs.artifact_tag }}
+            ${{ steps.identity.outputs.artifact_image_name }}:${{ steps.identity.outputs.release_version }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.identity.outputs.release_version }}
-      - name: Fix the immutable deployment identity
+      - name: Pin the artifact digest and preserve the runtime digest
         id: pin
         env:
-          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+          ARTIFACT_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
         run: python scripts/release.py pin
-      - name: Scan the registry image and enforce the configured security policy
-        id: scan
+      - name: Scan the exact runtime registry image
+        id: scan_runtime
+        continue-on-error: true
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         env:
           TRIVY_IMAGE_SRC: remote
@@ -91,10 +96,29 @@ jobs:
           TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
         with:
           version: v0.70.0
-          image-ref: ${{ steps.pin.outputs.exact_deploy_image }}
+          image-ref: ${{ steps.pin.outputs.exact_runtime_image }}
           scanners: vuln
           format: json
-          output: evidence/trivy.json
+          output: evidence/trivy-runtime.json
+          severity: ${{ env.TRIVY_BLOCKING_SEVERITIES }}
+          ignore-unfixed: ${{ env.TRIVY_IGNORE_UNFIXED }}
+          trivy-config: /dev/null
+          exit-code: "1"
+      - name: Scan the exact artifact registry image
+        id: scan_artifact
+        if: ${{ !cancelled() && steps.pin.outcome == 'success' }}
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_IMAGE_SRC: remote
+          TRIVY_IGNOREFILE: /dev/null
+          TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
+        with:
+          version: v0.70.0
+          image-ref: ${{ steps.pin.outputs.exact_artifact_image }}
+          scanners: vuln
+          format: json
+          output: evidence/trivy-artifact.json
           severity: ${{ env.TRIVY_BLOCKING_SEVERITIES }}
           ignore-unfixed: ${{ env.TRIVY_IGNORE_UNFIXED }}
           trivy-config: /dev/null
@@ -103,8 +127,9 @@ jobs:
         if: ${{ always() && steps.identity.outcome == 'success' }}
         env:
           TEST_RESULT: ${{ steps.tests.outcome }}
-          PUSH_RESULT: ${{ steps.image.outcome }}
-          SCAN_RESULT: ${{ steps.scan.outcome }}
+          ARTIFACT_PUSH_RESULT: ${{ steps.image.outcome }}
+          RUNTIME_SCAN_RESULT: ${{ steps.scan_runtime.outcome }}
+          ARTIFACT_SCAN_RESULT: ${{ steps.scan_artifact.outcome }}
         run: python scripts/release.py finalize-build
       - name: Preserve build evidence even on failure
         if: always()
@@ -116,7 +141,7 @@ jobs:
           retention-days: 30
 
   eks_dev:
-    name: Validate release digest on EKS dev
+    name: Validate release digest pair on EKS dev
     needs: build
     runs-on: [self-hosted, Windows, X64, model-service-validation]
     timeout-minutes: 15
@@ -124,7 +149,9 @@ jobs:
       AWS_REGION: ${{ vars.AWS_REGION }}
       AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
       EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
+      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
+      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
       DEPLOYMENT_ENVIRONMENT: eks-dev
       KUBE_CONTEXT: arn:aws:eks:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:cluster/${{ vars.EKS_CLUSTER_NAME }}
       KUBE_NAMESPACE: ${{ vars.EKS_DEV_NAMESPACE }}
@@ -155,7 +182,7 @@ jobs:
         with:
           name: release-build-${{ github.run_id }}
           path: evidence
-      - name: Deploy exact digest and verify EKS dev
+      - name: Deploy exact digest pair and verify EKS dev
         shell: powershell
         run: |
           python scripts/release.py deploy
@@ -178,7 +205,9 @@ jobs:
       contents: read
       actions: read
     env:
-      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
+      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
+      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
@@ -205,7 +234,7 @@ jobs:
           retention-days: 30
 
   production:
-    name: Approve ticket, then deploy the validated digest
+    name: Approve ticket, then deploy the validated digest pair
     needs: [build, eks_dev, candidate]
     # Configure required reviewers BEFORE running. See MANUAL_ACTIONS.md.
     environment:
@@ -214,7 +243,9 @@ jobs:
     runs-on: [self-hosted, Linux, X64, model-service-production]
     timeout-minutes: 15
     env:
-      EXACT_DEPLOY_IMAGE: ${{ needs.build.outputs.exact_deploy_image }}
+      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
+      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
+      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
       DEPLOYMENT_ENVIRONMENT: production
       KUBE_CONTEXT: ${{ vars.PRODUCTION_KUBE_CONTEXT }}
       KUBE_NAMESPACE: ${{ vars.PRODUCTION_NAMESPACE }}
@@ -274,6 +305,8 @@ jobs:
       - name: Record success only when every prerequisite and production succeeded
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
+          EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
+          EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
           TICKET_REFERENCE: ${{ inputs.ticket_reference }}
         run: python scripts/release.py summary
       - uses: actions/upload-artifact@v4

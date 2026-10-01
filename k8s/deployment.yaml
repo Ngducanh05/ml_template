@@ -19,10 +19,22 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        fsGroup: 10001
+      initContainers:
+        - name: model-artifact
+          image: ARTIFACT_IMAGE_REQUIRED
+          volumeMounts:
+            - name: model-volume
+              mountPath: /models
+              readOnly: false
       containers:
         - name: model-service
           # scripts/release.py replaces this locally before applying the manifest.
-          image: RELEASE_IMAGE_REQUIRED
+          image: RUNTIME_IMAGE_REQUIRED
+          volumeMounts:
+            - name: model-volume
+              mountPath: /models
+              readOnly: true
           envFrom:
             - configMapRef:
                 name: model-service-config
@@ -38,3 +50,6 @@ spec:
             httpGet:
               path: /health/live
               port: http
+      volumes:
+        - name: model-volume
+          emptyDir: {}

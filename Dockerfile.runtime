@@ -1,0 +1,25 @@
+FROM python:3.12.14-alpine3.24
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app/src
+
+WORKDIR /app
+
+COPY requirements-runtime.txt ./
+# scikit-learn 1.7.2 has no musllinux wheel; retain only its runtime libraries.
+RUN apk add --no-cache libstdc++ libgomp \
+    && apk add --no-cache --virtual .build-deps g++ \
+    && python -m pip install --no-cache-dir --requirement requirements-runtime.txt \
+    && apk del .build-deps \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app -h /nonexistent app
+
+COPY --chown=app:app src/ ./src/
+
+# Supply MODEL_PATH as the filesystem path to an externally mounted artifact.
+USER app
+
+EXPOSE 8000
+
+CMD ["python", "-m", "uvicorn", "model_service.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

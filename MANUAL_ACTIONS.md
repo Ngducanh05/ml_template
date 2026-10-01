@@ -1,4 +1,66 @@
-# Week 2 manual configuration and decisions
+# Week 3 dual-image release configuration
+
+This section describes the active `.github/workflows/release.yml`. The Week 2
+notes below are historical; their JFrog and Docker Desktop release instructions
+do not configure the active ECR/EKS flow.
+
+Configure these repository variables before the first acceptance run:
+
+| Variable | Required value / purpose |
+| --- | --- |
+| `AWS_ACCOUNT_ID` | Target 12-digit ECR/EKS account ID. |
+| `AWS_REGION` | Target AWS region. |
+| `ECR_RUNTIME_REPOSITORY` | Existing runtime repository, currently `model-service-runtime`. |
+| `ECR_ARTIFACT_REPOSITORY` | Artifact repository, currently `model-service-artifact`. |
+| `RUNTIME_IMAGE_DIGEST` | Approved, existing runtime manifest digest: `sha256:` plus 64 lowercase hex characters. No tag or full image URI. |
+| `TRIVY_BLOCKING_SEVERITIES` | Existing approved comma-separated severity policy; no default. |
+| `TRIVY_IGNORE_UNFIXED` | Existing approved `true` or `false` policy; no default. |
+| `EKS_CLUSTER_NAME` | Existing EKS dev cluster. |
+| `EKS_DEV_NAMESPACE` | Existing dedicated dev namespace. |
+
+The old single-repository variable is no longer consumed by this release path.
+Keep the existing `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` secrets, runner
+labels, production Environment variables `PRODUCTION_KUBE_CONTEXT` and
+`PRODUCTION_NAMESPACE`, and protected `KUBECONFIG_B64` secret. No new secret is
+introduced. Both targets must be able to pull both images. EKS dev continues to
+omit `imagePullSecrets` and use its existing ECR pull authorization; production
+retains the `model-service-registry` pull-secret behavior.
+
+Before acceptance, confirm that the runtime digest exists in the configured
+repository, is compatible with the trusted `artifacts/model.joblib` bundle, and
+is a `linux/amd64` image manifest. Deployment verification compares the imageID
+to that exact manifest digest; it does not resolve a multi-platform index to a
+child digest. Retain both images throughout approval and deployment. Configure
+artifact repository tag immutability and scoped publisher permissions: the
+workflow rejects existing version/build tags, but preflight is not a registry-wide
+lock. The runtime is never rebuilt or retagged by a model release.
+
+After review, merge the release code to `main`, use a fresh authorized `vX.Y.Z`
+tag at a commit reachable from `origin/main`, and dispatch Release with a
+non-sensitive ticket reference. Reruns remain disabled. Ensure the existing
+self-hosted runners are online and can reach their clusters. Confirm the
+`production` Environment has authorized required reviewers, prevent-self-review,
+and the selected `v*` release policy; the human must verify ticket approval.
+No production approval is automated.
+
+The automatic path is tests -> runtime existence/artifact tag preflight -> one
+`Dockerfile.artifact` build/push -> pin artifact digest -> scan both exact registry
+images -> EKS dev rollout/readiness/image checks/smoke -> candidate -> human
+Environment approval -> deploy and verify the same pair in production -> audit.
+`trivy-runtime.json` and `trivy-artifact.json` are separate evidence. Either scan
+failure blocks the build gate and candidate, even though both scan attempts may
+run to collect evidence. Scanning the artifact container does not validate model
+semantics. Temporary port-forward setup, smoke tests and cleanup are automatic.
+
+For the first acceptance run, inspect the schema-v2 digest pair across build,
+EKS dev, candidate, production and audit evidence. Verify that an unapproved or
+rejected candidate never executes production, and that either failed scan blocks
+eligibility. Use fresh commits/versions for failure exercises. Local tests do not
+prove live ECR/EKS behavior or GitHub Environment protection.
+
+# Historical Week 2 manual configuration and decisions
+
+The remainder is retained as historical context, not the active release runbook.
 
 ## Confirmed, proposed, unknown
 
