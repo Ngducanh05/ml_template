@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import platform
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from numbers import Integral, Real
@@ -31,7 +32,6 @@ VERIFIED_FEATURE_UNITS = "centimetres"
 VERIFIED_CLASS_IDS = (0, 1, 2)
 VERIFIED_MIN_BATCH_SIZE = 1
 VERIFIED_MAX_BATCH_SIZE = 100
-VERIFIED_MODEL_VERSION = "iris-demo-v1"
 VERIFIED_PYTHON_VERSION = "3.12.14"
 VERIFIED_SKLEARN_VERSION = "1.7.2"
 VERIFIED_SIGNATURE_INPUT = (
@@ -238,7 +238,10 @@ class SklearnJoblibAdapter:
             raise ModelLoadError("Artifact target contract is unsupported")
         if feature_units != VERIFIED_FEATURE_UNITS:
             raise ModelLoadError("Artifact feature units are unsupported")
-        if model_version != VERIFIED_MODEL_VERSION:
+        # Model identity may change independently of the supported Iris contract.
+        if not isinstance(model_version, str) or re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._+-]*", model_version
+        ) is None:
             raise ModelLoadError("Artifact model version is invalid")
         if artifact_python_version != VERIFIED_PYTHON_VERSION:
             raise ModelLoadError("Artifact Python version is invalid")

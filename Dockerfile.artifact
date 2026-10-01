@@ -1,0 +1,7 @@
+FROM alpine:3.24
+
+# The trusted bundle already contains the model and its metadata contract.
+COPY --chmod=0444 artifacts/model.joblib /artifact/model.joblib
+
+# Mount the destination volume at /models for the artifact handoff.
+CMD ["sh", "-c", "mkdir -p /models && cp /artifact/model.joblib /models/model.joblib && chmod 0444 /models/model.joblib"]

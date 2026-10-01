@@ -536,6 +536,51 @@ Application startup complete
 docker stop ml-template-validation
 ```
 
+## Optional runtime/artifact packaging (local preparation)
+
+The existing `Dockerfile` remains the combined image used by the current release
+flow. Two additional Dockerfiles prepare independent runtime and artifact images:
+
+- `Dockerfile.runtime` uses the same Python, dependencies, non-root user and
+  single Uvicorn worker, with no bundled model. Set `MODEL_PATH` to an externally
+  supplied file; the application continues to load it directly from the filesystem.
+- `Dockerfile.artifact` packages the existing trusted bundle unchanged at
+  `/artifact/model.joblib`. Its default command copies it to `/models/model.joblib`
+  with read permissions for the runtime user. Mount a writable volume at `/models`
+  for this handoff, then mount the same volume read-only in the runtime container.
+
+Artifact `model_version` is an identity, such as `iris-demo-v1` or `iris-demo-v2`.
+It must start with an ASCII letter or digit and contain only ASCII letters, digits,
+`.`, `_`, `+` or `-`. It is retained in the artifact contract and readiness log.
+The supported Iris features, targets, units, signatures, batch bounds, pipeline,
+class mapping and sklearn checks remain strict. Artifact Python metadata still
+requires `3.12.14`; a different runtime Python version still produces a warning.
+
+Local PowerShell verification (use an unused container name and port):
+
+```powershell
+docker build -f Dockerfile.runtime -t model-runtime:test .
+docker build -f Dockerfile.artifact -t model-artifact:test .
+$modelVolume = docker volume create
+try {
+  docker run --rm --mount "type=volume,source=$modelVolume,target=/models" model-artifact:test
+  docker run --rm -d --name ml-template-split-validation `
+    -p 18001:8000 -e MODEL_PATH=/models/model.joblib `
+    --mount "type=volume,source=$modelVolume,target=/models,readonly" model-runtime:test
+  # After the service reports application startup complete:
+  docker logs ml-template-split-validation
+  python scripts/smoke_test.py --base-url http://127.0.0.1:18001
+} finally {
+  docker rm -f ml-template-split-validation
+  docker volume rm $modelVolume
+}
+```
+
+These are local packaging checks. Building/pushing both image types, carrying both
+immutable digests, initContainer/shared-volume deployment wiring, dual-image release
+evidence and verification of both deployed digests belong to a future infrastructure
+task. The current release workflow still uses its single `exact_deploy_image`.
+
 ---
 
 # 11. Kubernetes
