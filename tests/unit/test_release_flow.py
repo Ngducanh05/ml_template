@@ -833,6 +833,7 @@ def test_real_kubectl_renders_dual_image_manifest_locally(monkeypatch, tmp_path,
     spec = rendered["spec"]["template"]["spec"]
     release.verify_images(identity, spec)
     assert rendered["metadata"]["name"] == "model-service"
+    assert "replicas" not in rendered["spec"]
     assert spec["securityContext"] == {
         "runAsNonRoot": True, "runAsUser": 10001, "runAsGroup": 10001, "fsGroup": 10001,
     }
@@ -848,3 +849,86 @@ def test_real_kubectl_renders_dual_image_manifest_locally(monkeypatch, tmp_path,
     runtime = release.named(spec["containers"], "model-service")
     assert runtime["readinessProbe"]["httpGet"]["path"] == "/health/ready"
     assert runtime["livenessProbe"]["httpGet"]["path"] == "/health/live"
+
+
+def test_shared_workload_deployment_accepts_dev_identity_without_fabricated_release(
+    monkeypatch, identity, pod
+):
+    pair = {key: identity[key] for key in (
+        "runtime_digest", "exact_runtime_image", "artifact_digest", "exact_artifact_image",
+    )}
+    annotations = {"dev.model-service/source-digest": "sha256:" + "e" * 64}
+    applied = []
+
+    def fake_command(*args, **kwargs):
+        if "set" in args:
+            return json.dumps({"spec": {"template": {"metadata": {}, "spec": pod["spec"]}}})
+        if "apply" in args and "input" in kwargs:
+            applied.append(json.loads(kwargs["input"]))
+        if "get" in args and "deployment" in args:
+            return json.dumps({"spec": {"template": {"spec": pod["spec"]}}})
+        if "get" in args and "pods" in args:
+            return json.dumps({"items": [pod]})
+        return ""
+
+    forward = Mock()
+    forward.poll.return_value = None
+    monkeypatch.setattr(release, "command", fake_command)
+    monkeypatch.setattr(release.subprocess, "Popen", lambda *a, **k: forward)
+    monkeypatch.setattr(release.socket, "create_connection", lambda *a, **k: release.socket.socket())
+    github = Mock(side_effect=AssertionError("Shared workload function must not access GitHub identity"))
+    monkeypatch.setattr(release, "bound_release", github)
+    report = {"production_eligible": False}
+    release.deploy_workload(pair, context="test-dev-cluster", namespace="dev", target="eks-dev",
+                            report=report, annotations=annotations)
+    assert report["deployment_result"] == "success"
+    assert report["production_eligible"] is False
+    assert report["checks"] == {k: "success" for k in ("apply", "rollout", "readiness", "image", "smoke")}
+    assert applied[0]["spec"]["template"]["metadata"]["annotations"] == annotations
+    assert "replicas" not in applied[0]["spec"]
+    assert "approval_state" not in report and "release_version" not in report
+    github.assert_not_called()
+    forward.terminate.assert_called_once()
+
+
+@pytest.mark.parametrize("field,value", [
+    ("runtime_digest", "sha256:short"), ("artifact_digest", "sha256:" + "c" * 64),
+    ("exact_runtime_image", "example.test/model:latest"),
+    ("exact_artifact_image", "example.test/model:latest"),
+])
+def test_shared_deployment_rejects_unpinned_or_mismatched_pair_before_kubectl(
+    monkeypatch, identity, field, value
+):
+    identity[field] = value
+    command = Mock()
+    monkeypatch.setattr(release, "command", command)
+    report = {"deployment_result": "success", "checks": {"apply": "success"}}
+    with pytest.raises(ValueError, match="deployment identity"):
+        release.deploy_workload(identity, context="test-dev-cluster", namespace="dev", target="eks-dev",
+                                report=report, annotations={})
+    command.assert_not_called()
+    assert report["deployment_result"] == "failure" and report["checks"] == {}
+
+
+def test_renderer_cannot_take_hpa_replica_ownership(monkeypatch, identity, pod):
+    renderer = Mock(return_value=json.dumps({
+        "spec": {"replicas": 1, "template": {"metadata": {}, "spec": pod["spec"]}},
+    }))
+    monkeypatch.setattr(release, "command", renderer)
+    with pytest.raises(ValueError, match="HPA replica ownership"):
+        release.deploy_workload(identity, context="test-dev-cluster", namespace="dev", target="eks-dev",
+                                report={}, annotations={})
+    assert renderer.call_count == 1
+    assert "--local" in renderer.call_args.args
+
+
+def test_release_identity_gate_still_runs_before_shared_deployment(monkeypatch, tmp_path):
+    monkeypatch.setattr(release, "EVIDENCE", tmp_path)
+    monkeypatch.setenv("DEPLOYMENT_ENVIRONMENT", "eks-dev")
+    monkeypatch.setattr(release, "bound_release", Mock(side_effect=ValueError("unverified release")))
+    shared = Mock()
+    monkeypatch.setattr(release, "deploy_workload", shared)
+    with pytest.raises(ValueError, match="unverified release"):
+        release.deploy()
+    shared.assert_not_called()
+    assert release.read("eks-dev.json")["deployment_result"] == "failure"

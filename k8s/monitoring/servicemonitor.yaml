@@ -1,0 +1,24 @@
+# Render APP_NAMESPACE_REQUIRED with render.py; do not apply this template directly.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: model-service
+  namespace: monitoring
+  labels:
+    release: ml-observability
+spec:
+  namespaceSelector:
+    matchNames:
+      - APP_NAMESPACE_REQUIRED
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+      honorLabels: false
+      relabelings:
+        - targetLabel: workload
+          replacement: model-service

@@ -1,0 +1,122 @@
+# kube-prometheus-stack 91.9.0; Helm release name MUST be ml-observability.
+# Conditional Dev installation only: inspect existing monitoring and capacity first.
+fullnameOverride: ml-observability
+defaultRules:
+  create: false
+alertmanager:
+  enabled: false
+nodeExporter:
+  enabled: false
+# Managed EKS control-plane internals are not scrape targets for this P0 scope.
+kubeApiServer:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false
+kubelet:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 15s
+    probes: false
+    cAdvisor: true
+    tlsConfig:
+      insecureSkipVerify: false
+      ca:
+        configMap:
+          name: kube-root-ca.crt
+          key: ca.crt
+    # The chart default drops throttling; keep it for resource-policy inspection.
+    cAdvisorMetricRelabelings: []
+kubeStateMetrics:
+  enabled: true
+kube-state-metrics:
+  fullnameOverride: ml-observability-kube-state-metrics
+  collectors:
+    - deployments
+    - horizontalpodautoscalers
+    - nodes
+    - pods
+    - replicasets
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+prometheus:
+  ingress:
+    enabled: false
+  service:
+    type: ClusterIP
+  prometheusSpec:
+    replicas: 1
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    retention: 24h
+    retentionSize: 1GB
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+    # Short Dev experiments only. Export evidence before restart/uninstall.
+    storageSpec:
+      emptyDir:
+        sizeLimit: 2Gi
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelector:
+      matchLabels:
+        release: ml-observability
+    serviceMonitorNamespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring
+grafana:
+  fullnameOverride: ml-observability-grafana
+  admin:
+    existingSecret: ml-observability-grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  defaultDashboardsEnabled: false
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: false
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  grafana.ini:
+    auth.anonymous:
+      enabled: false
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: monitoring
+      provider:
+        allowUiUpdates: false
+    datasources:
+      enabled: true
+      defaultDatasourceEnabled: true

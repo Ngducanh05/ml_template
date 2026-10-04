@@ -1,0 +1,1496 @@
+{
+  "uid": "ml-model-service-p0",
+  "title": "ML model service — P0 monitoring",
+  "tags": [
+    "ml-template",
+    "p0"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "refresh": "15s",
+  "time": {
+    "from": "now-30m",
+    "to": "now"
+  },
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "label": "Prometheus",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "refresh": 1,
+        "options": []
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "query": "label_values(kube_deployment_spec_replicas{deployment=\"model-service\"}, namespace)",
+          "refId": "namespace"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "workload",
+        "label": "Deployment",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${DS_PROMETHEUS}"
+        },
+        "query": {
+          "query": "label_values(kube_deployment_spec_replicas{namespace=\"$namespace\",deployment=\"model-service\"}, deployment)",
+          "refId": "workload"
+        },
+        "refresh": 1,
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
+        "current": {
+          "text": "model-service",
+          "value": "model-service"
+        },
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "text",
+      "title": "How to interpret these measurements",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Dev evidence only.** Select the verified namespace/workload and Prometheus source. App HTTP duration covers the ASGI response; inference duration covers one prediction service call, including operational failures. Request count is HTTP calls; item count is attempted batch rows. Schema rejections have HTTP observations only. Probe/metrics routes are excluded. P95 aggregates histogram buckets across replicas.\n\n**No data is not healthy:** check scrape health and required metric presence first. Error fractions/P95 require traffic; null is not zero. Rates need at least two scrapes. Zero errors is meaningful only with traffic and healthy sources. State/CPU/memory use kube-state-metrics ownership joins, not pod-name prefixes. Fresh pods appear after discovery/scrapes; export raw queries with timestamps for acceptance."
+      }
+    },
+    {
+      "id": 2,
+      "title": "Serving scrape health: every pod must be UP",
+      "type": "timeseries",
+      "description": "Each endpoint is one pod, not the Service VIP. Compare healthy target count with ready replicas. A missing series is missing discovery; 0 means failed scrape.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{namespace=\"$namespace\",workload=\"$workload\"}",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Kubernetes metric source health",
+      "type": "timeseries",
+      "description": "These are required scrape sources, not Metrics Server. A missing source is not a healthy measurement.",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{namespace=\"monitoring\",service=\"ml-observability-kube-state-metrics\"}",
+          "legendFormat": "KSM {{pod}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=\"kubelet\",metrics_path=\"/metrics\"}",
+          "legendFormat": "kubelet {{node}}",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "up{job=\"kubelet\",metrics_path=\"/metrics/cadvisor\"}",
+          "legendFormat": "cAdvisor {{node}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Required metric families missing (1 = missing; 0 = present)",
+      "type": "stat",
+      "description": "Presence alone does not prove healthy/current collection; inspect source UP and target discovery above.",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "absent(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}) or vector(0)",
+          "legendFormat": "HTTP",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "absent(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"model-service\"}) or vector(0)",
+          "legendFormat": "Container CPU",
+          "range": false,
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "absent(kube_deployment_status_replicas_ready{namespace=\"$namespace\",deployment=\"$workload\"}) or vector(0)",
+          "legendFormat": "Object state",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Prediction traffic state",
+      "type": "stat",
+      "description": "Requires healthy discovered serving targets and counter observations; rates need two scrapes. Compare target count versus ready replicas. No-traffic does not prove serving capability.",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(((sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) > bool 0) + 1)) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "traffic",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {},
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "1": {
+                  "text": "NO TRAFFIC",
+                  "color": "yellow"
+                },
+                "2": {
+                  "text": "TRAFFIC OBSERVED",
+                  "color": "blue"
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Prediction requests per second",
+      "type": "timeseries",
+      "description": "POST /api/v1/predict across all replicas and all statuses.",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval]))) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "HTTP requests/s",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Prediction HTTP errors per second",
+      "type": "timeseries",
+      "description": "Known zero counters keep zero errors distinct from missing collection. Traffic and source-health panels qualify this measurement.",
+      "gridPos": {
+        "x": 0,
+        "y": 38,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "((sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\",status=~\"4..\"}[$__rate_interval])) or (0 * sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval]))))) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "4xx (client/input)",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "((sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\",status=~\"5..\"}[$__rate_interval])) or (0 * sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval]))))) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "5xx (server/operational)",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Prediction HTTP error fractions",
+      "type": "timeseries",
+      "description": "Empty/NaN with no traffic. No clamp or unconditional zero-fill is applied to the denominator.",
+      "gridPos": {
+        "x": 0,
+        "y": 46,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "((sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\",status=~\"4..\"}[$__rate_interval])) or (0 * sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])))) / sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) and on() (sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) > 0)) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "4xx / all",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "((sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\",status=~\"5..\"}[$__rate_interval])) or (0 * sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])))) / sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) and on() (sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) > 0)) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "5xx / all",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Aggregate HTTP prediction P95",
+      "type": "timeseries",
+      "description": "Quantile is calculated from summed histogram buckets across pods/statuses; never averaged from per-pod quantiles.",
+      "gridPos": {
+        "x": 0,
+        "y": 54,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(model_service_http_request_duration_seconds_bucket{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval]))) and on() (sum(rate(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[$__rate_interval])) > 0)) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "HTTP P95",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Inference calls per second by outcome",
+      "type": "timeseries",
+      "description": "One service call counts once. Outcomes: success, input_error, not_ready, error. Schema validation rejected before the service call is HTTP-only.",
+      "gridPos": {
+        "x": 0,
+        "y": 62,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(sum by (outcome) (rate(model_service_inference_requests_total{namespace=\"$namespace\",workload=\"$workload\"}[$__rate_interval]))) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "title": "Attempted batch items per second by call outcome",
+      "type": "timeseries",
+      "description": "Attempted rows are distinct from request count. All attempted rows are assigned their call outcome; no quality/evaluation metric.",
+      "gridPos": {
+        "x": 0,
+        "y": 70,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(sum by (outcome) (rate(model_service_inference_items_total{namespace=\"$namespace\",workload=\"$workload\"}[$__rate_interval]))) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "title": "Aggregate inference P95",
+      "type": "timeseries",
+      "description": "Measures the prediction service call, not HTTP response serialization, network time or full request latency.",
+      "gridPos": {
+        "x": 0,
+        "y": 78,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(histogram_quantile(0.95, sum by (le) (rate(model_service_inference_duration_seconds_bucket{namespace=\"$namespace\",workload=\"$workload\"}[$__rate_interval]))) and on() (sum(rate(model_service_inference_duration_seconds_count{namespace=\"$namespace\",workload=\"$workload\"}[$__rate_interval])) > 0)) and on() (min(up{namespace=\"$namespace\",workload=\"$workload\"}) == 1)",
+          "legendFormat": "inference P95",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "title": "Prediction request increase per pod (5m)",
+      "type": "timeseries",
+      "description": "Use alongside the load timestamps to verify new replicas receive business traffic. Reset-safe increase is an estimate, not an exact client request count.",
+      "gridPos": {
+        "x": 0,
+        "y": 86,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum by (pod) (increase(model_service_http_requests_total{namespace=\"$namespace\",workload=\"$workload\",method=\"POST\",route=\"/api/v1/predict\"}[5m]))",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "title": "Runtime CPU usage by pod",
+      "type": "timeseries",
+      "description": "cAdvisor CPU seconds/second, filtered by Deployment ownership.",
+      "gridPos": {
+        "x": 0,
+        "y": 94,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"model-service\",image!=\"\"}[$__rate_interval]))) * on (namespace, pod) group_left() (max by (namespace, pod) (label_replace(kube_pod_owner{namespace=\"$namespace\",owner_kind=\"ReplicaSet\",owner_is_controller=\"true\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\") * on (namespace, replicaset) group_left() max by (namespace, replicaset) (kube_replicaset_owner{namespace=\"$namespace\",owner_kind=\"Deployment\",owner_name=\"$workload\",owner_is_controller=\"true\"})))",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cores",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "title": "Runtime working-set memory by pod",
+      "type": "timeseries",
+      "description": "Working set, not host memory. Ownership includes current and rolling ReplicaSets.",
+      "gridPos": {
+        "x": 0,
+        "y": 102,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(max by (namespace, pod) (container_memory_working_set_bytes{namespace=\"$namespace\",container=\"model-service\",image!=\"\"})) * on (namespace, pod) group_left() (max by (namespace, pod) (label_replace(kube_pod_owner{namespace=\"$namespace\",owner_kind=\"ReplicaSet\",owner_is_controller=\"true\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\") * on (namespace, replicaset) group_left() max by (namespace, replicaset) (kube_replicaset_owner{namespace=\"$namespace\",owner_kind=\"Deployment\",owner_name=\"$workload\",owner_is_controller=\"true\"})))",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "title": "Runtime CPU / requested CPU by pod",
+      "type": "timeseries",
+      "description": "Dashboard estimate based on cAdvisor; HPA reads Metrics API and may have different sample windows/readiness exclusions.",
+      "gridPos": {
+        "x": 0,
+        "y": 110,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\",container=\"model-service\",image!=\"\"}[$__rate_interval])) / on (namespace, pod) max by (namespace, pod) (kube_pod_container_resource_requests{namespace=\"$namespace\",container=\"model-service\",resource=\"cpu\",unit=\"core\"})) * on (namespace, pod) group_left() (max by (namespace, pod) (label_replace(kube_pod_owner{namespace=\"$namespace\",owner_kind=\"ReplicaSet\",owner_is_controller=\"true\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\") * on (namespace, replicaset) group_left() max by (namespace, replicaset) (kube_replicaset_owner{namespace=\"$namespace\",owner_kind=\"Deployment\",owner_name=\"$workload\",owner_is_controller=\"true\"})))",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "title": "Deployment and scrape target replicas",
+      "type": "timeseries",
+      "description": "Every ready serving pod should become a healthy scrape target. Pending pods do not count as successful scale-up.",
+      "gridPos": {
+        "x": 0,
+        "y": 118,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(kube_deployment_spec_replicas{namespace=\"$namespace\",deployment=\"$workload\"})",
+          "legendFormat": "desired",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(kube_deployment_status_replicas{namespace=\"$namespace\",deployment=\"$workload\"})",
+          "legendFormat": "current",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(kube_deployment_status_replicas_ready{namespace=\"$namespace\",deployment=\"$workload\"})",
+          "legendFormat": "ready",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "sum(up{namespace=\"$namespace\",workload=\"$workload\"})",
+          "legendFormat": "healthy app scrape targets",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "title": "HPA desired/current replicas",
+      "type": "timeseries",
+      "description": "HPA is expected to use the workload name model-service. Missing HPA series remains NO DATA.",
+      "gridPos": {
+        "x": 0,
+        "y": 126,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(kube_horizontalpodautoscaler_status_desired_replicas{namespace=\"$namespace\",horizontalpodautoscaler=\"$workload\"})",
+          "legendFormat": "HPA desired",
+          "range": true,
+          "instant": false
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max(kube_horizontalpodautoscaler_status_current_replicas{namespace=\"$namespace\",horizontalpodautoscaler=\"$workload\"})",
+          "legendFormat": "HPA current",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "title": "Pod phase by pod",
+      "type": "timeseries",
+      "description": "Kubernetes object state. Only active phases are shown; inspect Pending during scale-up.",
+      "gridPos": {
+        "x": 0,
+        "y": 134,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(max by (namespace, pod, phase) (kube_pod_status_phase{namespace=\"$namespace\"})) * on (namespace, pod) group_left() (max by (namespace, pod) (label_replace(kube_pod_owner{namespace=\"$namespace\",owner_kind=\"ReplicaSet\",owner_is_controller=\"true\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\") * on (namespace, replicaset) group_left() max by (namespace, replicaset) (kube_replicaset_owner{namespace=\"$namespace\",owner_kind=\"Deployment\",owner_name=\"$workload\",owner_is_controller=\"true\"}))) == 1",
+          "legendFormat": "{{pod}} {{phase}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "title": "Container restarts by pod",
+      "type": "timeseries",
+      "description": "Current lifetime restart counter. New pods have new series.",
+      "gridPos": {
+        "x": 0,
+        "y": 142,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "(max by (namespace, pod) (kube_pod_container_status_restarts_total{namespace=\"$namespace\",container=\"model-service\"})) * on (namespace, pod) group_left() (max by (namespace, pod) (label_replace(kube_pod_owner{namespace=\"$namespace\",owner_kind=\"ReplicaSet\",owner_is_controller=\"true\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\") * on (namespace, replicaset) group_left() max by (namespace, replicaset) (kube_replicaset_owner{namespace=\"$namespace\",owner_kind=\"Deployment\",owner_name=\"$workload\",owner_is_controller=\"true\"})))",
+          "legendFormat": "{{pod}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 8,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "title": "Runtime/model identity",
+      "type": "stat",
+      "description": "Bounded identity is attached to an info metric only. Compare against release evidence and Deployment/Pod exact image digests.",
+      "gridPos": {
+        "x": 0,
+        "y": 150,
+        "w": 24,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "model_service_build_info{namespace=\"$namespace\",workload=\"$workload\"}",
+          "legendFormat": "{{pod}} source={{source_commit}} tree={{source_digest}} dirty={{dirty}} model={{model_version}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "NO DATA",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      }
+    }
+  ]
+}
