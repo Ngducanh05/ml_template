@@ -23,6 +23,12 @@ spec:
       initContainers:
         - name: model-artifact
           image: ARTIFACT_IMAGE_REQUIRED
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              memory: 64Mi
           volumeMounts:
             - name: model-volume
               mountPath: /models
@@ -31,6 +37,14 @@ spec:
         - name: model-service
           # scripts/release.py replaces this locally before applying the manifest.
           image: RUNTIME_IMAGE_REQUIRED
+          # P0 Dev baseline and capacity rationale: docs/p0-monitoring.md.
+          # HPA owns replicas; do not add spec.replicas here or in CI rendering.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 384Mi
           volumeMounts:
             - name: model-volume
               mountPath: /models

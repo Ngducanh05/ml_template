@@ -372,6 +372,87 @@ def verify_pods(data: dict, pods: list) -> None:
                         "Artifact init container did not complete successfully")
 
 
+def deploy_workload(data: dict, *, context: str, namespace: str, target: str,
+                    report: dict, annotations: dict[str, str]) -> None:
+    """Apply and verify an exact image pair after caller-owned eligibility checks.
+
+    The release entrypoint retains its GitHub/candidate/approval boundary. A Dev
+    caller must independently verify its build/scan/source evidence and exclusive
+    use of the target; this function neither creates nor approves a candidate.
+    """
+    report.update(deployment_result="failure", checks={})
+    require(target in {"validation", "eks-dev", "production"}, "Unknown deployment environment")
+    require((target == "validation" and context == "docker-desktop") or
+            (target in {"eks-dev", "production"} and context != "docker-desktop"),
+            "Docker Desktop is only for local validation")
+    require(bool(context), "Explicit Kubernetes context is required")
+    require(re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace) is not None,
+            "Invalid namespace")
+    for kind in ("runtime", "artifact"):
+        digest, image = data.get(f"{kind}_digest"), data.get(f"exact_{kind}_image")
+        require(isinstance(digest, str) and re.fullmatch(DIGEST, digest) is not None
+                and isinstance(image, str) and re.fullmatch(IMAGE_NAME + "@" + DIGEST, image) is not None
+                and image.endswith("@" + digest), f"Invalid exact {kind} deployment identity")
+    report.update(deployment_environment=target, kubernetes_context=context, kubernetes_namespace=namespace)
+    prefix = ("kubectl", "--context", context, "--namespace", namespace, "--request-timeout=30s")
+
+    def kube(*args: str, **kwargs) -> str:
+        return command(*prefix, *args, **kwargs)
+
+    # Render first, then apply: the placeholder image is never sent to the API.
+    rendered = json.loads(command(
+        "kubectl", "set", "image", "--local", "-f", "k8s/deployment.yaml",
+        f'model-service={data["exact_runtime_image"]}',
+        f'model-artifact={data["exact_artifact_image"]}', "-o", "json",
+    ))
+    verify_images(data, rendered["spec"]["template"]["spec"])
+    require("replicas" not in rendered["spec"], "Deployment must preserve HPA replica ownership")
+    rendered["spec"]["template"]["metadata"].setdefault("annotations", {}).update(annotations)
+    if target == "eks-dev":
+        rendered["spec"]["template"]["spec"].pop("imagePullSecrets", None)
+    kube("apply", "-f", "k8s/configmap.yaml", "-f", "k8s/service.yaml")
+    kube("apply", "-f", "-", input=json.dumps(rendered))
+    report["checks"]["apply"] = "success"
+    kube("rollout", "status", "deployment/model-service", "--timeout=120s")
+    report["checks"]["rollout"] = "success"
+    kube("wait", "--for=condition=Available", "deployment/model-service", "--timeout=120s")
+    kube("wait", "--for=condition=Ready", "pod", "-l",
+         "app.kubernetes.io/name=model-service", "--timeout=120s")
+    report["checks"]["readiness"] = "success"
+    deployment = json.loads(kube("get", "deployment", "model-service", "-o", "json"))
+    verify_images(data, deployment["spec"]["template"]["spec"])
+    pods = json.loads(kube("get", "pods", "-l", "app.kubernetes.io/name=model-service",
+                           "-o", "json"))["items"]
+    verify_pods(data, pods)
+    report["checks"]["image"] = "success"
+    with socket.socket() as available:
+        available.bind(("127.0.0.1", 0))
+        port = available.getsockname()[1]
+    flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+    with tempfile.TemporaryFile() as log:
+        forward = subprocess.Popen(
+            [*prefix, "port-forward", "service/model-service", f"{port}:8000",
+             "--address=127.0.0.1"], stdout=log, stderr=log, creationflags=flags,
+        )
+        try:
+            for _ in range(60):
+                require(forward.poll() is None, "Port-forward exited unexpectedly")
+                try:
+                    with socket.create_connection(("127.0.0.1", port), timeout=1):
+                        break
+                except OSError:
+                    time.sleep(0.5)
+            else:
+                raise ValueError("Port-forward did not become ready")
+            print(command(sys.executable, "scripts/smoke_test.py", "--base-url",
+                          f"http://127.0.0.1:{port}"))
+            report["checks"]["smoke"] = "success"
+        finally:
+            forward.terminate()
+            forward.wait(timeout=10)
+    report["deployment_result"] = "success"
+
+
 def deploy() -> None:
     target = env("DEPLOYMENT_ENVIRONMENT")
     require(target in {"validation", "eks-dev", "production"}, "Unknown deployment environment")
@@ -397,74 +478,12 @@ def deploy() -> None:
             os.environ["KUBECONFIG"] = kube_file
         else:
             report["approval_state"] = "not_applicable"
-        context, namespace = env("KUBE_CONTEXT"), env("KUBE_NAMESPACE")
-        require((target == "validation" and context == "docker-desktop") or
-                (target in {"eks-dev", "production"} and context != "docker-desktop"),
-                "Docker Desktop is only for local validation")
-        require(re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", namespace) is not None,
-                "Invalid namespace")
-        report.update(kubernetes_context=context, kubernetes_namespace=namespace)
-        prefix = ("kubectl", "--context", context, "--namespace", namespace,
-                  "--request-timeout=30s")
-
-        def kube(*args: str, **kwargs) -> str:
-            return command(*prefix, *args, **kwargs)
-
-        # Render first, then apply: the placeholder image is never sent to the API.
-        rendered = json.loads(command(
-            "kubectl", "set", "image", "--local", "-f", "k8s/deployment.yaml",
-            f'model-service={data["exact_runtime_image"]}',
-            f'model-artifact={data["exact_artifact_image"]}', "-o", "json",
-        ))
-        verify_images(data, rendered["spec"]["template"]["spec"])
-        rendered["spec"]["template"]["metadata"].setdefault("annotations", {}).update({
-            "release.model-service/version": data["release_version"],
-            "release.model-service/git-sha": data["git_sha"],
-            "release.model-service/workflow-run": data["workflow_run"],
-        })
-        if target == "eks-dev":
-            rendered["spec"]["template"]["spec"].pop("imagePullSecrets", None)
-        kube("apply", "-f", "k8s/configmap.yaml", "-f", "k8s/service.yaml")
-        kube("apply", "-f", "-", input=json.dumps(rendered))
-        report["checks"]["apply"] = "success"
-        kube("rollout", "status", "deployment/model-service", "--timeout=120s")
-        report["checks"]["rollout"] = "success"
-        kube("wait", "--for=condition=Available", "deployment/model-service", "--timeout=120s")
-        kube("wait", "--for=condition=Ready", "pod", "-l",
-             "app.kubernetes.io/name=model-service", "--timeout=120s")
-        report["checks"]["readiness"] = "success"
-        deployment = json.loads(kube("get", "deployment", "model-service", "-o", "json"))
-        verify_images(data, deployment["spec"]["template"]["spec"])
-        pods = json.loads(kube("get", "pods", "-l", "app.kubernetes.io/name=model-service",
-                               "-o", "json"))["items"]
-        verify_pods(data, pods)
-        report["checks"]["image"] = "success"
-        with socket.socket() as available:
-            available.bind(("127.0.0.1", 0))
-            port = available.getsockname()[1]
-        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        with tempfile.TemporaryFile() as log:
-            forward = subprocess.Popen(
-                [*prefix, "port-forward", "service/model-service", f"{port}:8000",
-                 "--address=127.0.0.1"], stdout=log, stderr=log, creationflags=flags,
-            )
-            try:
-                for _ in range(60):
-                    require(forward.poll() is None, "Port-forward exited unexpectedly")
-                    try:
-                        with socket.create_connection(("127.0.0.1", port), timeout=1):
-                            break
-                    except OSError:
-                        time.sleep(0.5)
-                else:
-                    raise ValueError("Port-forward did not become ready")
-                print(command(sys.executable, "scripts/smoke_test.py", "--base-url",
-                              f"http://127.0.0.1:{port}"))
-                report["checks"]["smoke"] = "success"
-            finally:
-                forward.terminate()
-                forward.wait(timeout=10)
-        report["deployment_result"] = "success"
+        deploy_workload(data, context=env("KUBE_CONTEXT"), namespace=env("KUBE_NAMESPACE"),
+                        target=target, report=report, annotations={
+                            "release.model-service/version": data["release_version"],
+                            "release.model-service/git-sha": data["git_sha"],
+                            "release.model-service/workflow-run": data["workflow_run"],
+                        })
     finally:
         try:
             if kube_file:
