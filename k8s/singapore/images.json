@@ -1,0 +1,6 @@
+{
+  "artifact": "596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:6a595eeb88f3e8d028cf122068ed6bfdce2e800f9ca3554ea49b11e754062f3e",
+  "prometheus": "prom/prometheus@sha256:86b17a25c2db1d16a61b16b3c8f336679eb19e26333d03e808da387206e40faa",
+  "runtime": "596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:2823f97487217cfe3d28c5690829704d80cf13b13dfcef2a25f05a79b6e07ac0",
+  "grafana": "grafana/grafana@sha256:60794dc17e6a58d28539cfd3dd496a7f2da62e13ff54a4055431385eec5d6639"
+}
