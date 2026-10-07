@@ -1,0 +1,11 @@
+**
+!Dockerfile.control-plane-v2
+!control_plane/
+control_plane/**
+!control_plane/*.py
+!control_plane/requirements*.txt
+!canary/
+canary/**
+!canary/router.py
+**/__pycache__/**
+**/*.pyc
