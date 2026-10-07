@@ -1,0 +1,32 @@
+name: Runtime technical contract validation
+on:
+  workflow_dispatch:
+    inputs:
+      technical_contract:
+        description: Normalized BUILD_REQUIRED JSON (no model metadata or secrets)
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - name: Save input as data, never interpolate it into shell code
+        env:
+          TECHNICAL_CONTRACT: ${{ inputs.technical_contract }}
+        run: python -c 'import os,pathlib; pathlib.Path("build-request.json").write_text(os.environ["TECHNICAL_CONTRACT"], encoding="utf-8")'
+      - name: Validate fingerprint and block unconfigured build recipe
+        env:
+          PYTHONPATH: .
+        run: python -m scripts.runtime_build_request build-request.json
+      # Intentional fail-closed boundary. No AWS secrets, OIDC permissions,
+      # container build, push, or runtime-fp publication until a reviewed pinned
+      # recipe implements tests -> exact-image Trivy -> push -> eligibility.
