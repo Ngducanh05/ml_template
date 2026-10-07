@@ -1,0 +1,6 @@
+{
+  "Sid": "AllowCreditRiskWatcherReconciliation",
+  "Effect": "Allow",
+  "Principal": {"AWS": "arn:aws:iam::596432515999:role/ml-template-dev-sg-image-watcher"},
+  "Action": "ecr:DescribeImages"
+}

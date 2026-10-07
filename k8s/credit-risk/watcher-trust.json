@@ -1,0 +1,22 @@
+{
+  "Statement": [
+    {
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/eks-cluster-arn": "arn:aws:eks:ap-southeast-1:596432515999:cluster/ml-template-dev-sg",
+          "aws:RequestTag/kubernetes-service-account": "model-image-watcher",
+          "aws:RequestTag/kubernetes-namespace": "production"
+        }
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ],
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "pods.eks.amazonaws.com"
+      }
+    }
+  ],
+  "Version": "2012-10-17"
+}

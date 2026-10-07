@@ -1,0 +1,32 @@
+{
+  "Statement": [
+    {
+      "Action": [
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:ChangeMessageVisibility",
+        "sqs:GetQueueAttributes"
+      ],
+      "Effect": "Allow",
+      "Sid": "ReadConsumeQuangQueue",
+      "Resource": "arn:aws:sqs:ap-southeast-1:378457871131:mlflow-models-image-pushed"
+    },
+    {
+      "Action": [
+        "sqs:GetQueueAttributes"
+      ],
+      "Effect": "Allow",
+      "Sid": "ObserveQuangDlq",
+      "Resource": "arn:aws:sqs:ap-southeast-1:378457871131:mlflow-models-image-pushed-dlq"
+    },
+    {
+      "Action": [
+        "ecr:DescribeImages"
+      ],
+      "Effect": "Allow",
+      "Sid": "ReconcileQuangCanonicalImages",
+      "Resource": "arn:aws:ecr:ap-southeast-1:378457871131:repository/mlflow-models"
+    }
+  ],
+  "Version": "2012-10-17"
+}

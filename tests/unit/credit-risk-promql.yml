@@ -1,0 +1,35 @@
+evaluation_interval: 5s
+tests:
+- interval: 5s
+  input_series:
+  - series: 'credit_risk_router_requests_total{track="canary",status="200"}'
+    values: '0+5x10'
+  - series: 'credit_risk_router_requests_total{track="canary",status="500"}'
+    values: '0+0x10'
+  - series: 'credit_risk_router_request_duration_seconds_bucket{track="canary",status="200",le="0.1"}'
+    values: '0+5x10'
+  - series: 'credit_risk_router_request_duration_seconds_bucket{track="canary",status="200",le="+Inf"}'
+    values: '0+5x10'
+  promql_expr_test:
+  - expr: 'sum(rate(credit_risk_router_requests_total{track="canary",status=~"5.."}[30s])) / clamp_min(sum(rate(credit_risk_router_requests_total{track="canary"}[30s])),1e-12)'
+    eval_time: 35s
+    exp_samples:
+    - labels: '{}'
+      value: 0
+  - expr: 'histogram_quantile(0.95,sum by(le)(rate(credit_risk_router_request_duration_seconds_bucket{track="canary"}[30s])))'
+    eval_time: 35s
+    exp_samples:
+    - labels: '{}'
+      value: 0.095
+- interval: 5s
+  input_series:
+  - series: 'credit_risk_router_requests_total{track="canary",status="200"}'
+    values: '0+0x10'
+  - series: 'credit_risk_router_requests_total{track="canary",status="500"}'
+    values: '0+0x10'
+  promql_expr_test:
+  - expr: 'sum(rate(credit_risk_router_requests_total{track="canary",status=~"5.."}[30s])) / clamp_min(sum(rate(credit_risk_router_requests_total{track="canary"}[30s])),1e-12)'
+    eval_time: 35s
+    exp_samples:
+    - labels: '{}'
+      value: 0
