@@ -95,3 +95,9 @@ Theo xác nhận trực tiếp của người dùng, đã thêm 118.68.111.67/32
 Đã server dry-run và apply SA/RBAC/Service/5 Deployments v2 bằng digest image đã scan. Tất cả replicas=0; không apply ConfigMap. Đã đọc lại state: stable=null, highest_accepted=0, pending=[], active=null, weight=0. Legacy controller vẫn 0; không đổi Iris/legacy. Prometheus/Grafana hiện có, chưa thêm scrape/dashboard v2.
 
 Tiếp theo: tạo Draft PR thủ công (integration create PR bị403); xây dựng/test bootstrap CAS chỉ sau backend exact-pair verification; materialize deterministic runtime/full annotation và stable-v2; sau đó router, Prometheus, processor, reconciler, controller, consumer cuối cùng theo các gate đã định. Chưa chạy recovery live, chưa gửi yêu cầu promotion, chưa có candidate mới/Canary/rollback live. Grafana/autoscaling/BUILD_REQUIRED còn deferred theo thứ tự phase. QUANG_PROMOTION_READY=NO.
+
+## Bootstrap v2 — 2026-10-08, đang thực hiện
+
+Đã xác minh PR #8 Draft chưa merge; CI run 37733916321 tại HEAD9697c10 có cả7jobs success. Thêm scripts/bootstrap_v2.py: chỉ patch data/state.json, test metadata.resourceVersion bằng JSON Patch và dùng Store CAS; yêu cầu idle state, exact pair/fingerprint, KServe Ready+metadata và native inference [0,0,0]. 15focused tests và toàn bộ693tests đạt,2warnings cũ; compile/diffcheck đạt. Script operator ngoài image; runtime image không đổi.
+
+Đã materialize runtime-700096f6d55f8aa9b56c9049e1c4171633f403a8 với full fingerprint và credit-risk-stable-v2 đúng v3pair. Pod stable đang Pending: scheduler báo Insufficient cpu/memory trên2node t3.medium. Chưa bootstrap state/chưa bật router. Đang chờ người dùng quyết định tăng capacity; không giảm requests và không dừng workload cũ.
