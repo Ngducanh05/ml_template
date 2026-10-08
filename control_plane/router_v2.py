@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
 from .router import Routing, BoundedServer, requests, latency
 from .kserve_effects import LANES
 from .state_v2 import MODEL
@@ -86,6 +86,8 @@ def handler(routing, addresses, sender=forward):
 
 def main():
     from .kube_v2 import KubeV2
+    from .release_metrics_v2 import ReleaseCollector
+    collector = ReleaseCollector(); REGISTRY.register(collector)
     kube = KubeV2(); routing = Routing(); addresses = {}
     def sync():
         nonlocal addresses
@@ -100,6 +102,7 @@ def main():
                     raise ValueError("Stable baseline unavailable")
                 addresses = discovered
                 routing.set(state)
+                collector.update(state)
             except Exception as exc:
                 log("V2_ROUTE_STATE_UNAVAILABLE", error_type=type(exc).__name__)
             time.sleep(1)

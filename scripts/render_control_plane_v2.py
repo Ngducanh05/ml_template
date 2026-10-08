@@ -5,6 +5,7 @@ from pathlib import Path
 from control_plane.state_v2 import runtime_image, STATE_NAME
 from control_plane.kserve_effects import LANES
 from control_plane.policy import DEFAULTS
+from control_plane.autoscaling_v2 import DEFAULTS as HPA_DEFAULTS
 
 NS = "production"
 NAMES = dict(consumer="model-promotion-consumer-v2", processor="model-runtime-processor-v2",
@@ -26,6 +27,8 @@ def render(image):
         if role == "controller":
             # Kubernetes cannot restrict create by resourceNames. Scope is only
             # production; code restricts names and never updates ServingRuntime.
+            rules += [dict(apiGroups=['apps'], resources=['deployments'],
+                           resourceNames=[name + '-predictor' for name in LANES.values()], verbs=['get'])]
             rules += [dict(apiGroups=["serving.kserve.io"], resources=["servingruntimes"], verbs=["get", "create"]),
                       dict(apiGroups=["serving.kserve.io"], resources=["inferenceservices"], verbs=["create"])]
         objects += [dict(apiVersion="rbac.authorization.k8s.io/v1", kind="Role", metadata=dict(name=name, namespace=NS), rules=rules),
@@ -35,6 +38,7 @@ def render(image):
         env = dict(POD_NAMESPACE=NS, AWS_EC2_METADATA_DISABLED="true")
         if role == "controller":
             env.update(DEFAULTS)
+            env.update(HPA_DEFAULTS)
             env.update(V2_PROMETHEUS_URL="http://prometheus.production.svc:9090",
                        V2_ROUTER_URL="http://credit-risk-router-v2.production.svc:8080")
         container = dict(name=role, image=image, command=["python", "-m", "control_plane.run_v2"],

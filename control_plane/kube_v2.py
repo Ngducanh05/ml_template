@@ -45,6 +45,10 @@ class KubeV2(Kube):
         version = "v1alpha1" if kind == "servingruntimes" else "v1beta1"
         return f"/apis/serving.kserve.io/{version}/namespaces/{self.ns}/{kind}" + ("/" + name if name else "")
 
+    def get_deployment(self, lane):
+        name = LANES[lane] + '-predictor'
+        return self.request(f'/apis/apps/v1/namespaces/{self.ns}/deployments/{name}')
+
     def get(self, kind, name):
         return self.request(self.path(kind, name))
 

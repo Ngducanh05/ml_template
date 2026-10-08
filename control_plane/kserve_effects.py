@@ -4,6 +4,7 @@ import json
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import urlopen
+from .autoscaling_v2 import predictor_policy
 from .state import Conflict
 from .state_v2 import ServingPair, runtime_image
 from .runtime_catalog import fingerprint_tag
@@ -43,10 +44,27 @@ def lane_manifest(lane, pair, fingerprint):
     return dict(apiVersion="serving.kserve.io/v1beta1", kind="InferenceService",
         metadata=dict(name=name, namespace=NS, annotations={
             OWNER: "v2", "serving.kserve.io/deploymentMode": "Standard", "ml-template.io/model-version": pair.model_version}),
-        spec=dict(predictor=dict(serviceAccountName="kserve-artifact-reader", minReplicas=1, maxReplicas=1,
+        spec=dict(predictor=dict(serviceAccountName="kserve-artifact-reader", **predictor_policy(lane),
             securityContext=dict(fsGroup=10001, seccompProfile=dict(type="RuntimeDefault")),
             model=dict(modelFormat=dict(name="mlflow"), protocolVersion="v2",
                        runtime=runtime_name(fingerprint), storageUri=pair.storage_uri))))
+
+
+def deployment_ready(obj, pair):
+    """A Ready old replica must never qualify an incomplete new rollout."""
+    if not obj:
+        return False
+    spec, status = obj.get('spec', {}), obj.get('status', {})
+    count = spec.get('replicas', 0)
+    template = spec.get('template', {})
+    annotations = template.get('metadata', {}).get('annotations', {})
+    return (count > 0 and status.get('observedGeneration', 0) >= obj['metadata']['generation']
+        and status.get('replicas', 0) == status.get('updatedReplicas', 0) == count
+        and status.get('readyReplicas', 0) >= count and status.get('availableReplicas', 0) >= count
+        and annotations.get('ml-template.io/model-version') == pair['model_version']
+        and annotations.get('internal.serving.kserve.io/storage-initializer-sourceuri') == pair['storage_uri']
+        and any(c.get('name') == 'kserve-container' and c.get('image') == pair['runtime_digest']
+                for c in template.get('spec', {}).get('containers', [])))
 
 
 def read_json(url):
@@ -84,6 +102,9 @@ class KServeEffects:
         expected = desired["spec"]["predictor"]
         if any(actual.get(k) != expected[k] for k in ("serviceAccountName", "minReplicas", "maxReplicas", "securityContext")):
             return False
+        for key in ('scaleMetric', 'scaleTarget', 'autoScaling'):
+            if key in expected and actual.get(key) != expected[key]:
+                return False
         if any(actual.get(k) for k in ("containers", "initContainers", "volumes", "hostNetwork", "hostPID", "hostIPC", "imagePullSecrets")):
             return False
         model = actual["model"]
@@ -135,6 +156,8 @@ class KServeEffects:
                 or not any(c["type"] == "Ready" and c["status"] == "True" for c in status.get("conditions", []))):
             return False
         self.validate_runtime(self.api.get("servingruntimes", runtime_name(fingerprint)), fingerprint, pair["runtime_digest"])
+        if not deployment_ready(self.api.get_deployment(lane), pair):
+            return False
         base = status.get("address", {}).get("url", "")
         parsed = urlsplit(base)
         # Use the controller-reported internal service address, never external URL.

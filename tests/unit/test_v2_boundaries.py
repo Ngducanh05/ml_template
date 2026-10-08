@@ -37,6 +37,11 @@ def test_kserve_ready_requires_generation_pair_model_health_and_metadata():
     probe = Mock(return_value=dict(name=LANES['stable'], inputs=[{}], outputs=[{}]))
     effect = KServeEffects(api, Mock(), Mock(), probe)
     assert not effect.ready('stable', OLD, FP); probe.assert_not_called()
+    api.get_deployment.return_value = dict(metadata=dict(generation=2), spec=dict(replicas=1,
+        template=dict(metadata=dict(annotations={'ml-template.io/model-version':OLD['model_version'],
+        'internal.serving.kserve.io/storage-initializer-sourceuri':OLD['storage_uri']}),
+        spec=dict(containers=[dict(name='kserve-container',image=OLD['runtime_digest'])]))),
+        status=dict(observedGeneration=2,replicas=1,updatedReplicas=1,readyReplicas=1,availableReplicas=1))
     isvc['status']['observedGeneration'] = 2
     assert effect.ready('stable', OLD, FP)
     assert any('/v2/models/credit-risk-stable-v2/ready' in c.args[0] for c in probe.call_args_list)

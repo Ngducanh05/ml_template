@@ -41,6 +41,9 @@ class KubectlV2:
         raw = self.command("get", kind, name, "--ignore-not-found", "-o", "json")
         return json.loads(raw) if raw.strip() else None
 
+    def get_deployment(self, lane):
+        return json.loads(self.command('get', 'deployment', LANES[lane] + '-predictor', '-o', 'json'))
+
     def probe(self, url):
         code = "import json,sys;from urllib.request import urlopen; r=urlopen(sys.argv[1],timeout=5); b=r.read(1048577); assert len(b)<=1048576; print(json.dumps(json.loads(b) if b else {}))"
         return json.loads(self.command("exec", "deployment/credit-risk-stable-v2-predictor", "-c", "kserve-container",
