@@ -60,3 +60,8 @@ External evidence directory:
 C:\Users\Admin\.codex\visualizations\2026\10\06\01a10f41-2b35-7c93-970a-b58ad0977ecc\runtime-x-security
 
 Key files: catalog-seed-result.json, v3-live-catalog-reuse.json, champion-pointer-readonly.json, v2-validation-manifests.json, v2-empty-state.json. Only the empty v2 ConfigMap was created live; serving objects were server dry-run only. Existing state/resources/Iris/controllers/IAM/SQS/artifacts remain unchanged.
+
+
+## Cập nhật CI — 2026-10-08
+
+Đã bổ sung guards danh tính ServiceAccount/process/RoleBinding và security context cho cả năm workload v2. Negative tests kiểm tra 90 trường hợp sai lệch. Focused CI: 108 passed; toàn bộ regression: 670 passed, 2 cảnh báo dependency đã biết. Offline renderer và compileall đạt. Chưa có bằng chứng GitHub CI Gate hoặc Trivy 0.70.0 trong phase này. Không thay đổi hay kích hoạt tài nguyên live. Recovery RESOLUTION_BLOCKED và các phase tích hợp tiếp theo còn chưa thực hiện.

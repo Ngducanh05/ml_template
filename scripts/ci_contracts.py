@@ -45,7 +45,33 @@ def validate_manifests(release, control):
     expected = {"model-promotion-consumer-v2", "model-runtime-processor-v2", "model-champion-reconciler-v2",
                 "model-release-controller-v2", "credit-risk-router-v2"}
     require(len(deployments) == 5 and {x["metadata"]["name"] for x in deployments} == expected, "Wrong v2 workloads")
+    identities = {
+        "model-promotion-consumer-v2": ("model-promotion-consumer", "consumer"),
+        "model-runtime-processor-v2": ("model-runtime-processor-v2", "processor"),
+        "model-champion-reconciler-v2": ("model-champion-reconciler-v2", "reconciler"),
+        "model-release-controller-v2": ("model-release-controller-v2", "controller"),
+        "credit-risk-router-v2": ("credit-risk-router-v2", "router"),
+    }
     for deployment in deployments:
+        sa, process = identities[deployment["metadata"]["name"]]
+        pod = deployment["spec"]["template"]["spec"]
+        require(pod.get("serviceAccountName") == sa, "Wrong workload service account")
+        security = pod.get("securityContext", {})
+        require(security.get("runAsNonRoot") is True and security.get("runAsUser") == 10001
+                and security.get("runAsGroup") == 10001
+                and security.get("seccompProfile") == {"type": "RuntimeDefault"}, "Unsafe pod security")
+        require(len(pod["containers"]) == 1 and not pod.get("initContainers")
+                and not pod.get("ephemeralContainers"), "Unexpected workload containers")
+        container = pod["containers"][0]
+        require(container.get("command") == ["python", "-m", "control_plane.run_v2"]
+                and container.get("args") == [process, "--enable-live"], "Wrong workload process")
+        security = container.get("securityContext", {})
+        require(security.get("allowPrivilegeEscalation") is False
+                and security.get("readOnlyRootFilesystem") is True
+                and security.get("capabilities") == {"drop": ["ALL"]}
+                and not security.get("privileged", False)
+                and not any(k in security for k in ("runAsUser", "runAsGroup", "runAsNonRoot", "seccompProfile")),
+                "Unsafe container security")
         require(deployment["spec"]["replicas"] == 0, "Live replica enabled")
         require(all(c["image"] == CONTROL_PLANE_IMAGE for c in deployment["spec"]["template"]["spec"]["containers"]), "Mutable/incorrect control-plane image")
     roles = [x for x in control["items"] if x["kind"] == "Role"]
@@ -68,7 +94,13 @@ def validate_manifests(release, control):
     accounts = {x["metadata"]["name"] for x in control["items"] if x["kind"] == "ServiceAccount"}
     require(accounts == expected - {"model-promotion-consumer-v2"}, "Unexpected v2 service accounts")
     bindings = [x for x in control["items"] if x["kind"] == "RoleBinding"]
-    require(len(bindings) == 5 and {x["roleRef"]["name"] for x in bindings} == expected, "Incomplete role bindings")
+    require(len(bindings) == 5 and {x["metadata"]["name"] for x in bindings} == expected, "Incomplete role bindings")
+    for binding in bindings:
+        name = binding["metadata"]["name"]
+        require(binding.get("roleRef") == {"apiGroup": "rbac.authorization.k8s.io", "kind": "Role", "name": name},
+                "Wrong RoleBinding role identity")
+        require(binding.get("subjects") == [{"kind": "ServiceAccount", "name": identities[name][0], "namespace": "production"}],
+                "Wrong RoleBinding subject identity")
 
 
 def manifests(output):

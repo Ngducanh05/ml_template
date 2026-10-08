@@ -91,3 +91,36 @@ def test_actual_final_gate_script_fails_closed(result):
     else: states[gate['needs'][0]]['result'] = result
     output = subprocess.run([sys.executable,'-c',script], env={**os.environ,'NEEDS_JSON':json.dumps(states)}, capture_output=True, text=True)
     assert (output.returncode == 0) == (result == 'success')
+
+
+@pytest.mark.parametrize("name", ["model-promotion-consumer-v2", "model-runtime-processor-v2",
+    "model-champion-reconciler-v2", "model-release-controller-v2", "credit-risk-router-v2"])
+@pytest.mark.parametrize("violation", ["account", "command", "args", "nonroot", "uid", "gid", "seccomp",
+    "escalation", "readonly", "capabilities", "privileged", "override", "sidecar", "role", "subject-kind",
+    "subject-name", "subject-namespace", "extra-subject"])
+def test_workload_identity_security_drift(rendered, name, violation):
+    release, control = rendered
+    deployment = next(x for x in control["items"] if x["kind"] == "Deployment" and x["metadata"]["name"] == name)
+    binding = next(x for x in control["items"] if x["kind"] == "RoleBinding" and x["metadata"]["name"] == name)
+    pod = deployment["spec"]["template"]["spec"]
+    container = pod["containers"][0]
+    if violation == "account": pod["serviceAccountName"] = "default"
+    elif violation == "command": container["command"] = ["python", "-m", "control_plane.controller"]
+    elif violation == "args": container["args"] = ["wrong-role", "--enable-live"]
+    elif violation == "nonroot": pod["securityContext"]["runAsNonRoot"] = False
+    elif violation == "uid": pod["securityContext"]["runAsUser"] = 0
+    elif violation == "gid": pod["securityContext"]["runAsGroup"] = 0
+    elif violation == "seccomp": pod["securityContext"]["seccompProfile"] = {"type": "Unconfined"}
+    elif violation == "escalation": container["securityContext"]["allowPrivilegeEscalation"] = True
+    elif violation == "readonly": container["securityContext"]["readOnlyRootFilesystem"] = False
+    elif violation == "capabilities": container["securityContext"]["capabilities"]["add"] = ["SYS_ADMIN"]
+    elif violation == "privileged": container["securityContext"]["privileged"] = True
+    elif violation == "override": container["securityContext"]["runAsUser"] = 0
+    elif violation == "sidecar": pod["containers"].append(dict(container))
+    elif violation == "role": binding["roleRef"]["name"] = "legacy-role"
+    elif violation == "subject-kind": binding["subjects"][0]["kind"] = "User"
+    elif violation == "subject-name": binding["subjects"][0]["name"] = "default"
+    elif violation == "subject-namespace": binding["subjects"][0]["namespace"] = "default"
+    elif violation == "extra-subject": binding["subjects"].append(dict(binding["subjects"][0]))
+    with pytest.raises(ValueError):
+        validate_manifests(release, control)
