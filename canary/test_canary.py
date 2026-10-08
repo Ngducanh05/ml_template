@@ -120,7 +120,14 @@ class InfrastructureRegressionTests(unittest.TestCase):
             here=Path(folder)
             (here/'dashboard.json').write_text('{"uid":"local-canary"}')
             (here/'prometheus.yml').write_text('rule_files: [CANARY_ALERT_RULES]')
-            with patch.object(demo,'HERE',here), patch.object(demo,'RUNTIME',here/'.runtime'), patch.object(demo.bootstrap,'validate_installation',return_value=(here/'server.exe',here)):
+            with patch.object(demo, 'HERE', here), \
+                patch.object(demo, 'RUNTIME', here/'.runtime'), \
+                patch.object(demo.bootstrap, 'require_windows', return_value=None), \
+                patch.object(
+                    demo.bootstrap,
+                    'validate_installation',
+                    return_value=(here/'server.exe', here)
+                ):
                 demo.configure()
             for part in ('grafana-data','grafana-logs','prometheus-data','provisioning/datasources','provisioning/dashboards'):
                 self.assertTrue((here/'.runtime'/part).is_dir())
