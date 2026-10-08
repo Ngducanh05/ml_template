@@ -77,3 +77,11 @@ python -m control_plane.operator_v2 recover-resolution --model-version 3 --opera
 ```
 
 CI hardening đã push: 6ae636a. Tạo Draft PR qua integration bị 403 Resource not accessible by integration; chưa có bằng chứng CI Gate xanh. Mở https://github.com/Ngducanh05/ml_template/compare/main...feat/canary-monitoring-demo?expand=1 rồi chọn Create draft pull request.
+
+## Image và kiểm kê chỉ đọc — 2026-10-08
+
+Image từ source de3fd311df7da971431f417b9ac4d41456957ec1 đã build một lần, smoke linux/amd64 dưới UID/GID 10001:10001, network=none/read-only, default help và imports đạt. Trivy 0.70.0 quét archive của cùng image: 0 HIGH/CRITICAL, ignore-unfixed=false, không ngoại lệ; scan bổ sung 0.75.0 cũng đạt. Đã push nguyên image vào ECR và xác nhận digest:
+
+`596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:5935e1d61fd248e545ff09d47a6d16f2ec517ac4441842950d9b961c4f0997bd`
+
+Tag: control-plane-v2-de3fd31. Rendered v2 deployments replicas=0 ra evidence ngoài repo; chưa apply. STS xác nhận account 596432515999; context ml-template-dev-sg; EKS ACTIVE. Pod Identity hiện có: kserve-artifact-reader, model-promotion-consumer, model-image-watcher. Chưa có association processor/reconciler. Kubernetes API timeout: publicAccessCidrs chỉ 1.55.96.180/32, IP egress hiện tại 118.68.111.67. Đang chờ quyết định thêm riêng IP hiện tại hoặc đổi mạng; không tự mở rộng endpoint. Chưa retry Gate1; chưa verify stable/live metrics/consumer. Không có thay đổi IAM, Pod Identity hay Kubernetes trong phase này. QUANG_PROMOTION_READY=NO.
