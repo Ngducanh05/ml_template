@@ -52,7 +52,7 @@ No rebuild/repush. Security remains PASS WITH DOCUMENTED RISK ACCEPTANCE, not cl
 
 BUILD_REQUIRED CI still needs a pinned reproducible runtime recipe, functional validation, exact-image security review, candidate push, and eligibility publication. No automatic cluster-to-GitHub trigger exists. The workflow cannot build or publish until this is implemented and approved.
 
-Processor RESOLUTION_BLOCKED requires an explicit audited CAS recovery operation after the operational cause is fixed; none is auto-requeued. Controller BLOCKED retains previous pair and resumes recovery checks, never falsely reports success. Bounded history means older versions outside the retained identity window are classified stale by the permanent high-water mark rather than retaining an unbounded conflict ledger.
+Processor RESOLUTION_BLOCKED supports explicit audited CAS recovery after the operational cause is fixed; none is auto-requeued. Controller BLOCKED retains previous pair and resumes recovery checks, never falsely reports success. Bounded history means older versions outside the retained identity window are classified stale by the permanent high-water mark rather than retaining an unbounded conflict ledger.
 
 ## Evidence
 
@@ -65,3 +65,15 @@ Key files: catalog-seed-result.json, v3-live-catalog-reuse.json, champion-pointe
 ## Cập nhật CI — 2026-10-08
 
 Đã bổ sung guards danh tính ServiceAccount/process/RoleBinding và security context cho cả năm workload v2. Negative tests kiểm tra 90 trường hợp sai lệch. Focused CI: 108 passed; toàn bộ regression: 670 passed, 2 cảnh báo dependency đã biết. Offline renderer và compileall đạt. Chưa có bằng chứng GitHub CI Gate hoặc Trivy 0.70.0 trong phase này. Không thay đổi hay kích hoạt tài nguyên live. Recovery RESOLUTION_BLOCKED và các phase tích hợp tiếp theo còn chưa thực hiện.
+
+## Recovery v2 — 2026-10-08
+
+Đã thêm control_plane.operator_v2: chỉ chuyển đúng một version RESOLUTION_BLOCKED sang RESOLUTION_RETRY qua Store CAS, reset attempts=0, next_attempt=now, lưu lỗi cũ trong audit và xóa error_type hiện hành. Sai version/trạng thái hoặc retry trùng bị từ chối; không resolve, deploy hay truy cập legacy state. 8 focused tests và toàn bộ 678 tests đạt (2 cảnh báo cũ); compileall, safe help và diff check đạt. Chưa chạy recovery live.
+
+Lệnh operator dưới đây chạy bên trong một Pod quản trị đã được duyệt, có image control-plane mới và quyền get/update đúng model-release-state-v2; không chạy trên Pod legacy.
+
+```sh
+python -m control_plane.operator_v2 recover-resolution --model-version 3 --operator OPERATOR_ID --note "Operational cause verified fixed" --enable-live
+```
+
+CI hardening đã push: 6ae636a. Tạo Draft PR qua integration bị 403 Resource not accessible by integration; chưa có bằng chứng CI Gate xanh. Mở https://github.com/Ngducanh05/ml_template/compare/main...feat/canary-monitoring-demo?expand=1 rồi chọn Create draft pull request.
