@@ -1,0 +1,73 @@
+# Render IMAGE_DIGEST_REQUIRED with render_dashboard_v2.py before review/apply.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlops-v2-state-exporter
+  namespace: production
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mlops-v2-state-exporter
+  template:
+    metadata:
+      labels:
+        app: mlops-v2-state-exporter
+    spec:
+      serviceAccountName: mlops-v2-state-exporter
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: exporter
+          image: IMAGE_DIGEST_REQUIRED
+          command: [python, -m, control_plane.exporters.model_state_exporter]
+          env:
+            - name: POD_NAMESPACE
+              value: production
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+          ports:
+            - name: metrics
+              containerPort: 9093
+          readinessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: metrics
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 96Mi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlops-v2-state-exporter
+  namespace: production
+  labels:
+    app: mlops-v2-state-exporter
+spec:
+  type: ClusterIP
+  selector:
+    app: mlops-v2-state-exporter
+  ports:
+    - name: metrics
+      port: 9093
+      targetPort: metrics

@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: credit-risk-router-v2
+  namespace: monitoring
+  labels:
+    release: ml-observability
+spec:
+  jobLabel: app
+  namespaceSelector:
+    matchNames: [production]
+  selector:
+    matchLabels:
+      app: credit-risk-router-v2
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

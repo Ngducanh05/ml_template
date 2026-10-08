@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="2832" viewBox="0 0 1680 2832"><rect width="100%" height="100%" fill="#101217"/>
+<text x="34" y="47" font-family="Segoe UI,sans-serif" font-size="27" fill="#D8DEE9">MLOps v2 — Infrastructure &amp; Serving</text>
+<text x="34" y="75" font-family="Segoe UI,sans-serif" font-size="16" fill="#FF9830">DESIGN MOCKUP — NOT A LIVE GRAFANA SCREENSHOT</text>
+<text x="34" y="104" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Prometheus  /  production  /  credit-risk  /  All pods  /  All nodes  /  Stable + Canary  /  $0.0528 per node-hour</text>
+<text x="34" y="131" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Stable: green     Canary: amber     Warning: orange     Failure: red     Missing: NO DATA</text>
+<rect x="34" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Nodes Ready / NotReady</text>
+<text x="48" y="225" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="302" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="314" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Stable model</text>
+<text x="316" y="225" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="570" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="582" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Active candidate</text>
+<text x="584" y="225" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="838" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Canary weight</text>
+<text x="852" y="225" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="1106" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="1118" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Stable HPA current / max</text>
+<text x="1120" y="225" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="1374" y="160" width="258" height="102" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="1386" y="186" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Nodes / EC2 compute</text>
+<text x="1386" y="208" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">estimate</text>
+<text x="1388" y="247" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="34" y="272" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="298" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Stable / Canary RPS</text>
+<line x1="49" y1="338" x2="545" y2="338" stroke="#303642"/>
+<line x1="49" y1="380" x2="545" y2="380" stroke="#303642"/>
+<line x1="49" y1="422" x2="545" y2="422" stroke="#303642"/>
+<text x="56" y="351" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="570" y="272" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="582" y="298" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">5xx error ratio</text>
+<line x1="585" y1="338" x2="1081" y2="338" stroke="#303642"/>
+<line x1="585" y1="380" x2="1081" y2="380" stroke="#303642"/>
+<line x1="585" y1="422" x2="1081" y2="422" stroke="#303642"/>
+<text x="592" y="351" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="1106" y="272" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="1118" y="298" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">p50 / p95 latency</text>
+<line x1="1121" y1="338" x2="1617" y2="338" stroke="#303642"/>
+<line x1="1121" y1="380" x2="1617" y2="380" stroke="#303642"/>
+<line x1="1121" y1="422" x2="1617" y2="422" stroke="#303642"/>
+<text x="1128" y="351" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="496" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="522" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Node CPU used / allocatable</text>
+<line x1="49" y1="562" x2="813" y2="562" stroke="#303642"/>
+<line x1="49" y1="604" x2="813" y2="604" stroke="#303642"/>
+<line x1="49" y1="646" x2="813" y2="646" stroke="#303642"/>
+<text x="56" y="575" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="838" y="496" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="522" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Node memory working set / allocatable</text>
+<line x1="853" y1="562" x2="1617" y2="562" stroke="#303642"/>
+<line x1="853" y1="604" x2="1617" y2="604" stroke="#303642"/>
+<line x1="853" y1="646" x2="1617" y2="646" stroke="#303642"/>
+<text x="860" y="575" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="720" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="746" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Per-Pod CPU usage / request / limit</text>
+<line x1="49" y1="786" x2="813" y2="786" stroke="#303642"/>
+<line x1="49" y1="828" x2="813" y2="828" stroke="#303642"/>
+<line x1="49" y1="870" x2="813" y2="870" stroke="#303642"/>
+<text x="56" y="799" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="838" y="720" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="746" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Per-Pod memory usage / request / limit</text>
+<line x1="853" y1="786" x2="1617" y2="786" stroke="#303642"/>
+<line x1="853" y1="828" x2="1617" y2="828" stroke="#303642"/>
+<line x1="853" y1="870" x2="1617" y2="870" stroke="#303642"/>
+<text x="860" y="799" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="944" width="794" height="186" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="970" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Per-Pod CPU utilization ratios</text>
+<line x1="49" y1="1010" x2="813" y2="1010" stroke="#303642"/>
+<line x1="49" y1="1043" x2="813" y2="1043" stroke="#303642"/>
+<line x1="49" y1="1076" x2="813" y2="1076" stroke="#303642"/>
+<text x="56" y="1023" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="838" y="944" width="794" height="186" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="970" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Per-Pod memory utilization ratios</text>
+<line x1="853" y1="1010" x2="1617" y2="1010" stroke="#303642"/>
+<line x1="853" y1="1043" x2="1617" y2="1043" stroke="#303642"/>
+<line x1="853" y1="1076" x2="1617" y2="1076" stroke="#303642"/>
+<text x="860" y="1023" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="1140" width="1598" height="270" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="1166" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Pod inventory</text>
+<rect x="46" y="1186" width="1574" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1213" width="1574" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1240" width="1574" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1267" width="1574" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="56" y="1202" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="34" y="1420" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="1446" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">KServe InferenceServices</text>
+<rect x="46" y="1466" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1493" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1520" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1547" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="56" y="1482" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="838" y="1420" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="1446" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">HPA details</text>
+<rect x="850" y="1466" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="850" y="1493" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="850" y="1520" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="850" y="1547" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="860" y="1482" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="34" y="1672" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="1698" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Deployment rollout convergence</text>
+<rect x="46" y="1718" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1745" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1772" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="1799" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="56" y="1734" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="838" y="1672" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="1698" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Prometheus scrape health</text>
+<line x1="853" y1="1738" x2="1617" y2="1738" stroke="#303642"/>
+<line x1="853" y1="1790" x2="1617" y2="1790" stroke="#303642"/>
+<line x1="853" y1="1842" x2="1617" y2="1842" stroke="#303642"/>
+<text x="860" y="1751" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="1924" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="1950" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Pod readiness timeline</text>
+<line x1="49" y1="1990" x2="813" y2="1990" stroke="#303642"/>
+<line x1="49" y1="2042" x2="813" y2="2042" stroke="#303642"/>
+<line x1="49" y1="2094" x2="813" y2="2094" stroke="#303642"/>
+<text x="56" y="2003" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="838" y="1924" width="794" height="242" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="1950" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Operational alert conditions</text>
+<text x="852" y="1989" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="34" y="2176" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="2202" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Release state</text>
+<rect x="46" y="2222" width="502" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2249" width="502" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2276" width="502" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2303" width="502" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="56" y="2238" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="570" y="2176" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="582" y="2202" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Release phase timeline</text>
+<line x1="585" y1="2242" x2="1081" y2="2242" stroke="#303642"/>
+<line x1="585" y1="2284" x2="1081" y2="2284" stroke="#303642"/>
+<line x1="585" y1="2326" x2="1081" y2="2326" stroke="#303642"/>
+<text x="592" y="2255" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="1106" y="2176" width="526" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="1118" y="2202" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Router state freshness</text>
+<line x1="1121" y1="2242" x2="1617" y2="2242" stroke="#303642"/>
+<line x1="1121" y1="2284" x2="1617" y2="2284" stroke="#303642"/>
+<line x1="1121" y1="2326" x2="1617" y2="2326" stroke="#303642"/>
+<text x="1128" y="2255" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">NO DATA — no invented samples</text>
+<rect x="34" y="2400" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="2426" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Release audit / stage timestamps</text>
+<rect x="46" y="2446" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2473" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2500" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<rect x="46" y="2527" width="770" height="22" rx="4" fill="#20252E" stroke="#292E38"/>
+<text x="56" y="2462" font-family="Segoe UI,sans-serif" font-size="13" fill="#8E8E8E">Awaiting verified source</text>
+<rect x="838" y="2400" width="794" height="214" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="850" y="2426" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Required telemetry source presence</text>
+<text x="852" y="2465" font-family="Segoe UI,sans-serif" font-size="19" fill="#8E8E8E">NO DATA</text>
+<rect x="34" y="2624" width="1598" height="158" rx="4" fill="#181B22" stroke="#343945"/>
+<text x="46" y="2650" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Evidence / runbook</text>
+<text x="50" y="2686" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">Runbook · evidence · rollout verification</text>
+<text x="50" y="2711" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">NO DATA is not healthy. ISVC Ready alone is insufficient.</text>
+<text x="50" y="2736" font-family="Segoe UI,sans-serif" font-size="16" fill="#D8DEE9">EC2 compute only — excludes EKS / EBS / transfer / tax / T3 credits.</text>
+</svg>

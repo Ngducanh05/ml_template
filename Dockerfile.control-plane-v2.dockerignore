@@ -3,6 +3,8 @@
 !control_plane/
 control_plane/**
 !control_plane/*.py
+!control_plane/exporters/
+!control_plane/exporters/*.py
 !control_plane/requirements*.txt
 !canary/
 canary/**

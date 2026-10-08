@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mlops-v2-state-exporter
+  namespace: monitoring
+  labels:
+    release: ml-observability
+spec:
+  jobLabel: app
+  namespaceSelector:
+    matchNames: [production]
+  selector:
+    matchLabels:
+      app: mlops-v2-state-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s

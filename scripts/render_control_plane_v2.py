@@ -47,8 +47,8 @@ def render(image):
                          securityContext=dict(allowPrivilegeEscalation=False, capabilities=dict(drop=["ALL"]), readOnlyRootFilesystem=True))
         if role == "router":
             container.update(ports=[dict(containerPort=8080)], readinessProbe=dict(httpGet=dict(path="/health/ready", port=8080)))
-            objects.append(dict(apiVersion="v1", kind="Service", metadata=dict(name=name, namespace=NS),
-                spec=dict(type="ClusterIP", selector={"app":name}, ports=[dict(port=8080, targetPort=8080)])))
+            objects.append(dict(apiVersion="v1", kind="Service", metadata=dict(name=name, namespace=NS, labels={"app":name}),
+                spec=dict(type="ClusterIP", selector={"app":name}, ports=[dict(name="http", port=8080, targetPort=8080)])))
         objects.append(dict(apiVersion="apps/v1", kind="Deployment", metadata=dict(name=name, namespace=NS),
             spec=dict(replicas=0, selector=dict(matchLabels={"app":name}),
                 strategy=dict(type="Recreate"), template=dict(metadata=dict(labels={"app":name}),
