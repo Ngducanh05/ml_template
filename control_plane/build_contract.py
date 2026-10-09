@@ -1,5 +1,5 @@
 """Normalized CI build request; no model identity, credentials or builder effect."""
-from .runtime_resolver import (ArtifactContract, RuntimeProfile, RUNTIME_X_V1,
+from .runtime_resolver import (ArtifactContract, RuntimeProfile, RUNTIME_X_V1, RUNTIME_CI_V2,
                                normalize_requirements, parse_python_version, runtime_fingerprint)
 
 
@@ -21,6 +21,6 @@ def validate_request(data):
     profile = RuntimeProfile(**data["runtime_profile"])
     # Only the reviewed serving/build profile is currently defined. New profiles
     # need an explicit recipe; accepting arbitrary strings would promise a build.
-    if profile != RUNTIME_X_V1 or build_request(contract, profile) != data:
+    if profile not in (RUNTIME_X_V1, RUNTIME_CI_V2) or build_request(contract, profile) != data:
         raise ValueError("Noncanonical or unsupported technical build request")
     return contract, profile

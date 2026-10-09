@@ -1,5 +1,8 @@
 # ServingPair release control plane v2
 
+Current implementation guidance: [generic runtime CI](runtime-build-ci.md). The live-state statements below are historical checkpoints, not current cluster assertions; consult locally verified acceptance evidence. BUILD_REQUIRED source now provides a versioned CI recipe and protected publication path; actual image/security/OIDC validation remains a separate gate.
+
+
 The local automated path is implemented separately from the live legacy stack:
 
 `model_promoted -> CAS ingestion -> independent processor -> ECR catalog -> READY_FOR_RELEASE -> ServingPair controller -> KServe effects -> V2 router -> observations -> promotion/rollback`.

@@ -2,7 +2,7 @@
 import copy
 import time
 from urllib.parse import urlsplit
-from .runtime_resolver import ArtifactContract, normalize_requirements, parse_python_version, runtime_fingerprint
+from .runtime_resolver import ArtifactContract, normalize_requirements, parse_python_version, runtime_fingerprint, RUNTIME_X_V1, RUNTIME_CI_V2
 from .build_contract import build_request
 from .artifact_metadata import validate_mlmodel
 from .state_v2 import storage_uri, ServingPair, audit
@@ -48,10 +48,16 @@ class Processor:
         log("PROCESSOR_STARTED", model_version=event["model_version"])
         try:
             contract = self.source.inspect(event["artifact_uri"])
-            fingerprint = runtime_fingerprint(contract)
+            profile = RUNTIME_X_V1
+            fingerprint = runtime_fingerprint(contract, profile)
             image = self.catalog.lookup(fingerprint)
+            if image is None:
+                # A new recipe must not inherit the identity of historical builds.
+                profile = RUNTIME_CI_V2
+                fingerprint = runtime_fingerprint(contract, profile)
+                image = self.catalog.lookup(fingerprint)
             result = dict(status="READY_FOR_RELEASE" if image else "BUILD_REQUIRED",
-                          fingerprint=fingerprint, build_request=build_request(contract),
+                          fingerprint=fingerprint, build_request=build_request(contract, profile),
                           next_attempt=self.clock() + 900, attempts=0)
             if image:
                 result["pair"] = ServingPair(event["model_version"], image, event["artifact_uri"]).record()

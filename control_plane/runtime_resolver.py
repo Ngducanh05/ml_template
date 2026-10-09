@@ -126,6 +126,14 @@ RUNTIME_X_V1 = RuntimeProfile(
 )
 
 
+# Versioned recipe: preserve all existing runtime-x fingerprints/catalog hits.
+RUNTIME_CI_V2 = RuntimeProfile(
+    mlserver_version="1.7.1", mlserver_mlflow_version="1.7.1", platform="linux/amd64",
+    build_profile="runtime-ci-py31214-slim-v2",
+    serving_profile="mlserver-v2-parallel-workers-0",
+)
+
+
 def runtime_fingerprint(
     contract: ArtifactContract,
     profile: RuntimeProfile = RUNTIME_X_V1,
