@@ -28,12 +28,15 @@ class Effects:
     def metrics(self): return self.values
 
 
-def setup():
+def setup(approved=True):
     b = Backend(initial_state(OLD, FP)); s = Store(b)
     enqueue(s, event())
     source = Mock(); source.inspect.return_value = CONTRACT
     catalog = Mock(); catalog.lookup.return_value = IMAGE
     Processor(s, source, catalog).tick()
+    if approved:
+        from approval_helpers import approve
+        approve(s)
     e = Effects(s); clock = [0]
     c = Controller(s, e, owner="one", clock=lambda: clock[0], policy=Policy(1, 0, 300, .05, .1))
     return b, s, e, clock, c

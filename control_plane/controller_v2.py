@@ -6,6 +6,7 @@ import uuid
 from urllib.error import HTTPError, URLError
 from .state import Busy
 from .state_v2 import audit, HISTORY
+from .authorization_v2 import claimable, validate_authorization
 from .policy import Policy
 from .controller import assess
 from .telemetry import log
@@ -73,7 +74,7 @@ class Controller:
                 # Never infer a ServingPair from legacy model-release-state.
                 if state["stable"] is None:
                     return
-                eligible = [x for x in state["pending"] if x["status"] == "READY_FOR_RELEASE"
+                eligible = [x for x in state["pending"] if claimable(state, x, self.clock())
                             and int(x["pair"]["model_version"]) > int(state["stable"]["model_version"])]
                 if not eligible:
                     return
@@ -85,12 +86,20 @@ class Controller:
                 state["active"] = dict(pair=copy.deepcopy(candidate["pair"]), fingerprint=candidate["fingerprint"],
                     phase="PREPARING", previous_stable=copy.deepcopy(state["stable"]),
                     previous_fingerprint=state["stable_fingerprint"], deadline=self.clock() + self.policy.timeout,
-                    stage_since=None)
+                    stage_since=None, authorization=copy.deepcopy(candidate["authorization"]))
                 route(state, 0)
-                audit(state, "release_started", self.clock(), pair=candidate["pair"])
+                audit(state, "release_started", self.clock(), pair=candidate["pair"], authorization_id=candidate["authorization"]["evidence_hash"])
             self.change(claim)
             return
         phase = a["phase"]
+        if phase not in ("ROLLBACK", "BLOCKED"):
+            try:
+                auth = a['authorization']
+                validate_authorization(auth, dict(pair=a['pair'], fingerprint=a['fingerprint'],
+                    event=auth['evidence']['candidate']['event']))
+            except (KeyError, ValueError, TypeError):
+                self.rollback('missing_release_authorization')
+                return
         try:
             self.advance(s, a)
         except Busy:
@@ -185,7 +194,7 @@ class Controller:
             def complete(state):
                 state["processed"] = (state["processed"] + [copy.deepcopy(pair)])[-HISTORY:]
                 state["active"] = None
-                audit(state, "release_completed", self.clock(), pair=pair)
+                audit(state, "release_completed", self.clock(), pair=pair, authorization_id=a.get("authorization", {}).get("evidence_hash"))
             self.change(complete)
         elif phase in ("ROLLBACK", "BLOCKED"):
             self.change(lambda state: route(state, 0))
@@ -198,5 +207,5 @@ class Controller:
                 state["stable_fingerprint"] = previous_fp
                 state["failed"] = (state["failed"] + [dict(pair=pair, reason=a["reason"])])[-HISTORY:]
                 state["active"] = None
-                audit(state, "rollback_completed", self.clock(), previous_stable=previous)
+                audit(state, "rollback_completed", self.clock(), previous_stable=previous, authorization_id=a.get("authorization", {}).get("evidence_hash"))
             self.change(restored)

@@ -158,10 +158,14 @@ class Store:
             if state["active"]["phase"] not in ("PREPARING", "RAMP", "FINALIZING", "DRAINING", "ROLLBACK", "BLOCKED"):
                 raise ValueError("Invalid release phase")
         for item in state["pending"]:
-            if item["status"] == "READY_FOR_RELEASE":
+            if item["status"] in ("READY_FOR_RELEASE", "APPROVED_FOR_RELEASE"):
                 pair = ServingPair(**item["pair"])
                 if pair.model_version != item["event"]["model_version"] or pair.storage_uri != item["event"]["artifact_uri"]:
                     raise ValueError("Resolved candidate identity mismatch")
+            if item.get("authorization") is not None or item["status"] == "APPROVED_FOR_RELEASE":
+                from .authorization_v2 import validate_authorization
+                if item["status"] != "APPROVED_FOR_RELEASE": raise ValueError("Authorization on unresolved candidate")
+                validate_authorization(item.get("authorization"), item)
         if len(state["pending"]) > MAX_PENDING or any(len(state[k]) > HISTORY for k in ("audit", "identities", "processed", "failed")):
             raise Busy("State collection bound exceeded")
         if len(json.dumps(state, allow_nan=False).encode()) > 500_000:

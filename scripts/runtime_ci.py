@@ -57,9 +57,7 @@ def aws_catalog():
     return Catalog(boto3.client('ecr',region_name='ap-southeast-1'))
 
 
-def publish(data, image, report, catalog):
-    validate_request(data)
-    require_clean_scan(report, data)
+def verify_registry_image(image, report, catalog):
     from control_plane.state_v2 import runtime_image
     runtime_image(image)
     digest=image.split('@')[1]
@@ -78,6 +76,12 @@ def publish(data, image, report, catalog):
         manifest=json.loads(childrows[0]['imageManifest'])
     if manifest.get('config',{}).get('digest') != report['Metadata']['ImageID']:
         raise ValueError('Registry image does not match scanned image config')
+
+
+def publish(data, image, report, catalog):
+    validate_request(data)
+    require_clean_scan(report, data)
+    verify_registry_image(image, report, catalog)
     existing=catalog.lookup(data['fingerprint'])
     if existing is not None:
         if existing!=image: raise ValueError('Fingerprint digest conflict')

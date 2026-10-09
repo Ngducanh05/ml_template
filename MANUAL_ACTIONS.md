@@ -1,3 +1,9 @@
+# Current v2 Release authorization
+
+The mentor-confirmed approved-ticket + explicit human production approval requirement remains mandatory. The current source path is documented in [Release v2 authorization](docs/release-authorization-v2.md), including exact unapplied RBAC/credential proposals and Settings checks. GitHub authorizes the exact ServingPair through CAS; Controller executes Canary and rollback. Source implementation is not proof of live enforcement.
+
+Everything below is retained historical dual-image configuration, not the active v2 deployment runbook. Do not apply its broad deployment credentials to the new authorizer.
+
 # Week 3 dual-image release configuration
 
 This section describes the active `.github/workflows/release.yml`. The Week 2

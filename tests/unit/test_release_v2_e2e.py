@@ -16,6 +16,7 @@ from control_plane.router_v2 import forward
 from test_state_v2 import Backend, event
 from test_processor_v2 import IMAGE, FP, CONTRACT, client
 from test_controller_v2 import Effects, OLD
+from approval_helpers import approve
 
 
 def test_dry_automated_ingest_resolve_promote_restart_reconcile():
@@ -28,6 +29,7 @@ def test_dry_automated_ingest_resolve_promote_restart_reconcile():
     ecr = client()
     ecr.describe_images.return_value["imageDetails"][0]["imageTags"] = [fingerprint_tag(runtime_fingerprint(CONTRACT))]
     assert Processor(Store(backend), source, Catalog(ecr)).tick() == "READY_FOR_RELEASE"
+    approve(store)
     effects = Effects(store)
     policy = Policy(1, 0, 300, .05, .1)
     for _ in range(15):
@@ -51,6 +53,7 @@ def test_dry_failure_restores_exact_pair_and_miss_cannot_deploy():
     source = Mock(); source.inspect.return_value = CONTRACT
     catalog = Mock(); catalog.lookup.return_value = IMAGE
     Processor(store, source, catalog).tick()
+    approve(store)
     effects = Effects(store); effects.values["errors"] = .9
     c = Controller(store, effects, owner="same", clock=lambda: 0, policy=Policy(1, 0, 300, .05, .1))
     for _ in range(8): c.tick()

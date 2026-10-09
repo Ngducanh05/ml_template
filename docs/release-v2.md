@@ -1,3 +1,7 @@
+# Current release authorization boundary
+
+See [authoritative Release integration](release-authorization-v2.md). READY_FOR_RELEASE now requires protected production approval and durable APPROVED_FOR_RELEASE before Controller claim. The following checkpoints describe historical implementation/live states; none proves the new gate is deployed.
+
 # ServingPair release control plane v2
 
 Current implementation guidance: [generic runtime CI](runtime-build-ci.md). The live-state statements below are historical checkpoints, not current cluster assertions; consult locally verified acceptance evidence. BUILD_REQUIRED source now provides a versioned CI recipe and protected publication path; actual image/security/OIDC validation remains a separate gate.
