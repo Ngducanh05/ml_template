@@ -118,6 +118,14 @@ jobs:
           format: json
           output: trivy.json
           exit-code: '0'
+      - name: Preserve Trivy evidence even when security gate blocks
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-trivy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: trivy.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Enforce unsuppressed complete scan gate
         run: python -c 'import json; from scripts.runtime_ci import require_clean_scan; require_clean_scan(json.load(open("trivy.json")))'
       - name: Archive immutable tested/scanned payload
