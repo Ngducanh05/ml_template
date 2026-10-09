@@ -1,0 +1,164 @@
+name: Generic runtime build and gated catalog publication
+on:
+  workflow_dispatch:
+    inputs:
+      technical_contract:
+        description: Canonical CI-v2 technical JSON only; no artifact or model identity
+        required: true
+        type: string
+      publish:
+        description: Requires approved runtime-build-publish OIDC environment and role
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: runtime-build-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fingerprint: ${{ steps.request.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - name: Save request as data
+        env:
+          TECHNICAL_CONTRACT: ${{ inputs.technical_contract }}
+        run: python -c 'import os,pathlib; pathlib.Path("request.json").write_text(os.environ["TECHNICAL_CONTRACT"], encoding="utf-8")'
+      - id: request
+        name: Independently validate fingerprint and reviewed recipe
+        run: |
+          python -m scripts.runtime_ci prepare --request request.json --output context
+          python -c 'import os,json; d=json.load(open("request.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("fingerprint="+d["fingerprint"]+"\n")'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-context
+          path: |
+            context/
+            request.json
+          include-hidden-files: true
+          retention-days: 14
+  catalog:
+    needs: validate
+    if: ${{ inputs.publish }}
+    environment: runtime-build-publish
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build_required: ${{ steps.lookup.outputs.build_required }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-context
+          path: input
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.RUNTIME_BUILD_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - id: lookup
+        name: Reuse eligible immutable catalog entry; operational errors fail closed
+        run: |
+          python -m scripts.runtime_ci lookup --request input/request.json --output lookup.json
+          python -c 'import json,os; d=json.load(open("lookup.json")); open(os.environ["GITHUB_OUTPUT"],"a").write("build_required="+str(d["build_required"]).lower()+"\n")'
+  build:
+    needs: [validate, catalog]
+    if: ${{ always() && needs.validate.result == 'success' && (needs.catalog.result == 'skipped' || (needs.catalog.result == 'success' && needs.catalog.outputs.build_required == 'true')) }}
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-context
+          path: input
+      - name: Build once without AWS credentials or model artifact access
+        run: docker build --platform linux/amd64 --provenance=false -t runtime-ci:candidate input/context
+      - name: Native MLServer functional smoke in disposable tmpfs
+        run: >-
+          docker run --rm --network=none --read-only --cap-drop=ALL
+          --security-opt=no-new-privileges --tmpfs /tmp:rw,size=512m,mode=1777
+          --mount type=bind,source=${{ github.workspace }}/runtime_ci/smoke.py,target=/smoke.py,readonly
+          runtime-ci:candidate python /smoke.py
+      - name: Save exact tested artifact
+        run: docker save -o runtime.tar runtime-ci:candidate
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_IGNOREFILE: /dev/null
+          TRIVY_IGNORE_UNFIXED: "false"
+        with:
+          version: v0.70.0
+          input: runtime.tar
+          trivy-config: /dev/null
+          ignore-unfixed: "false"
+          scan-type: image
+          scanners: vuln
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          format: json
+          output: trivy.json
+          exit-code: '0'
+      - name: Enforce unsuppressed complete scan gate
+        run: python -c 'import json; from scripts.runtime_ci import require_clean_scan; require_clean_scan(json.load(open("trivy.json")))'
+      - name: Archive immutable tested/scanned payload
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-tested
+          path: |
+            runtime.tar
+            trivy.json
+          retention-days: 14
+  publish:
+    needs: [validate, catalog, build]
+    if: ${{ inputs.publish && needs.build.result == 'success' && needs.catalog.outputs.build_required == 'true' }}
+    environment: runtime-build-publish
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-context
+          path: input
+      - uses: actions/download-artifact@v4
+        with:
+          name: runtime-tested
+          path: tested
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.RUNTIME_BUILD_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - name: Push same archive, verify scanned config, publish immutable eligibility
+        env:
+          CANDIDATE_TAG: runtime-ci-${{ github.run_id }}-${{ github.run_attempt }}
+        run: python -m scripts.runtime_ci_publish --request input/request.json --archive tested/runtime.tar --scan tested/trivy.json
