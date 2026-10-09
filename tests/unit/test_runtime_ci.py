@@ -15,7 +15,7 @@ CONFIG='sha256:'+'b'*64
 
 
 def scan(vulns=None):
-    return {'ArtifactType':'container_image','Metadata':{'ImageID':CONFIG},'Results':[{'Target':'runtime','Vulnerabilities':vulns or []}]}
+    return {'ArtifactType':'container_image','Metadata':{'ImageID':CONFIG},'Results':[{'Target':'runtime','Class':'lang-pkgs','Type':'python-pkg','Vulnerabilities':vulns or []}]}
 
 
 def test_independent_fingerprint_and_context_excludes_model(tmp_path):

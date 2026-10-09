@@ -35,7 +35,7 @@ def archive_config(path):
 def main():
     p=argparse.ArgumentParser(description=__doc__)
     for name in ('request','archive','scan'):p.add_argument('--'+name,type=Path,required=True)
-    a=p.parse_args();data=read_request(a.request);report=json.loads(a.scan.read_text());require_clean_scan(report)
+    a=p.parse_args();data=read_request(a.request);report=json.loads(a.scan.read_text());require_clean_scan(report, data)
     if archive_config(a.archive)!=report['Metadata']['ImageID']:raise ValueError('Scanned archive identity mismatch')
     catalog=aws_catalog()
     # A publication retry never needs another build or candidate push.

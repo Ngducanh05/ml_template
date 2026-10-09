@@ -39,11 +39,15 @@ def prepare(data, output):
     (output/'.dockerignore').write_text('**\n!Dockerfile\n!requirements.txt\n!request.json\n')
 
 
-def require_clean_scan(report):
-    if report.get('ArtifactType') != 'container_image' or not report.get('Metadata',{}).get('ImageID') or not report.get('Results'):
-        raise ValueError('Missing complete image scan')
-    if any(v['Severity'] in ('HIGH','CRITICAL','UNKNOWN') for r in report['Results'] for v in r.get('Vulnerabilities',[])):
-        raise ValueError('Security gate failed')
+def require_clean_scan(report, request, waivers=None, *, now=None):
+    from datetime import datetime, timezone
+    from control_plane.runtime_security import evaluate_scan, load_json
+    if waivers is None:
+        waivers = load_json(ROOT/'security/runtime-vulnerability-waivers.json')
+    decision = evaluate_scan(report, request, waivers, now=now or datetime.now(timezone.utc))
+    if decision['decision'] != 'PASS':
+        raise ValueError('Security gate failed: ' + ', '.join(decision['errors'] or decision['remediation'].keys()))
+    return decision
 
 
 def aws_catalog():
@@ -55,7 +59,7 @@ def aws_catalog():
 
 def publish(data, image, report, catalog):
     validate_request(data)
-    require_clean_scan(report)
+    require_clean_scan(report, data)
     from control_plane.state_v2 import runtime_image
     runtime_image(image)
     digest=image.split('@')[1]
