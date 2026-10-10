@@ -39,7 +39,7 @@ def render(image):
         if role == "controller":
             env.update(DEFAULTS)
             env.update(HPA_DEFAULTS)
-            env.update(V2_PROMETHEUS_URL="http://prometheus.production.svc:9090",
+            env.update(V2_AUTOMATIC_TRAFFIC="false", V2_PROMETHEUS_URL="http://prometheus.production.svc:9090",
                        V2_ROUTER_URL="http://credit-risk-router-v2.production.svc:8080")
         container = dict(name=role, image=image, command=["python", "-m", "control_plane.run_v2"],
                          args=[role, "--enable-live"], env=[dict(name=k, value=v) for k,v in env.items()],

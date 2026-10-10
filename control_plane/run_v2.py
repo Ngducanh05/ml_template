@@ -49,7 +49,13 @@ def main():
         from .observations_v2 import Observations
         # No fallback to legacy metrics/router. URLs must be provided explicitly.
         observe = Observations(os.environ["V2_PROMETHEUS_URL"], os.environ["V2_ROUTER_URL"])
-        tick = Controller(store, KServeEffects(KubeV2(), observe.router, observe.metrics)).tick
+        from .automatic_traffic_v2 import AutomaticTraffic
+        api=KubeV2();effects=KServeEffects(api,observe.router,observe.metrics)
+        controller=Controller(store,effects)
+        traffic=AutomaticTraffic.from_env(api,effects)
+        def tick():
+            controller.tick()
+            traffic.tick(store.read())
     while True:
         try: tick()
         except Exception as exc: log("V2_COMPONENT_RETRY", component=args.role, error_type=type(exc).__name__)

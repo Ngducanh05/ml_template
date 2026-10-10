@@ -41,6 +41,76 @@ def validate_config(config):
         raise ValueError("synthetic_quality_gate_opt_in_required")
 
 
+def exact_ramp(config,state):
+    """Automatic runs bind one claimed authorization, never just a version number."""
+    if 'expected_release' not in config:return
+    from control_plane.automatic_traffic_v2 import binding
+    active=state.get('active')
+    if (config['mode']!='policy-test' or not active or active.get('phase')!='RAMP'
+            or state['route']['weight'] not in STAGES
+            or binding(active)!=config['expected_release']
+            or state['stable']!=config['expected_release']['previous_stable']):
+        raise ValueError('automatic_release_identity_or_phase_changed')
+
+
+def automatic_observation(config, state):
+    """Observe one authorization across phases; this does not grant send permission."""
+    from control_plane.automatic_traffic_v2 import binding
+    expected=config['expected_release']
+    if (config['mode']!='policy-test' or config['version']!=expected['pair']['model_version']
+            or state.get('schema_version')!=2 or state.get('model_name')!='credit-risk-classifier'):
+        raise ValueError('unexpected_automatic_release')
+    active=state.get('active')
+    if active and binding(active)!=expected:
+        raise ValueError('automatic_release_identity_changed')
+    # Stage audit rows lack IDs: only the latest contiguous release segment is usable.
+    starts=[i for i,row in enumerate(state['audit']) if row['reason']=='release_started']
+    if not starts:
+        return 'BLOCKED','missing_exact_release_evidence',[]
+    rows=state['audit'][starts[-1]:]; start=rows[0]
+    if start.get('pair')!=expected['pair'] or start.get('authorization_id')!=expected['authorization_id']:
+        return 'BLOCKED','conflicting_release_evidence',[]
+    stages=[]; terminal=None
+    for row in rows[1:]:
+        if terminal is not None:
+            if row['reason'] in ('stage_promoted','release_completed','rollback_completed'):
+                return 'BLOCKED','conflicting_terminal_evidence',stages
+        elif row['reason']=='stage_promoted':
+            stages.append(row['previous_weight'])
+        elif row['reason'] in ('release_completed','rollback_completed'):
+            terminal=row
+    if active:
+        if terminal is not None:
+            return 'BLOCKED','conflicting_terminal_evidence',stages
+        phase=active['phase']
+        if phase=='BLOCKED': return 'BLOCKED','controller_blocked',stages
+        if phase not in ('PREPARING','RAMP','FINALIZING','DRAINING','ROLLBACK'):
+            raise ValueError('unexpected_automatic_phase')
+        if phase in ('PREPARING','RAMP','FINALIZING') and state['stable']!=expected['previous_stable']:
+            raise ValueError('automatic_stable_changed')
+        if phase=='DRAINING' and state['stable']!=expected['pair']:
+            raise ValueError('automatic_stable_changed')
+        if phase=='ROLLBACK' and state['stable'] not in (expected['previous_stable'],expected['pair']):
+            raise ValueError('automatic_stable_changed')
+        return None,None,stages
+    if (not terminal or terminal.get('authorization_id')!=expected['authorization_id']
+            or state['route']['weight']!=0):
+        return 'BLOCKED','missing_exact_terminal_evidence',stages
+    if terminal['reason']=='release_completed':
+        if terminal.get('pair')!=expected['pair'] or state['stable']!=expected['pair']:
+            return 'BLOCKED','terminal_pair_mismatch',stages
+        if stages!=[10,25,50,100]: return 'BLOCKED','incomplete_stage_evidence',stages
+        return 'PASS','release_completed',stages
+    failed=[x for x in state['failed'] if x['pair']==expected['pair']]
+    if (terminal.get('previous_stable')!=expected['previous_stable']
+            or state['stable']!=expected['previous_stable'] or len(failed)!=1):
+        return 'BLOCKED','rollback_identity_mismatch',stages
+    reasons=[row.get('detail') for row in rows if row['reason']=='rollback_requested']
+    if not reasons or reasons[-1]!=failed[0]['reason']:
+        return 'BLOCKED','rollback_reason_mismatch',stages
+    return 'FAIL',failed[0]['reason'],stages
+
+
 def admit(state, target, mode):
     if state.get("schema_version")!=2 or state.get("model_name")!="credit-risk-classifier":
         raise ValueError("unexpected_state")
@@ -190,8 +260,19 @@ def execute(config, payload, client, evidence, clock=time.monotonic, sleep=time.
         else: counts["errors"]+=int(200<=row["status"]<300)
         evidence.emit("request",**row)
     try:
-        state=client.state(); admit(state,config["version"],config["mode"])
-        if not client.ready(): raise ValueError("router_not_ready")
+        automatic='expected_release' in config
+        state=client.state()
+        if automatic:
+            status,detail,seen=automatic_observation(config,state)
+            stages.update(seen)
+            if status:
+                result=dict(outcome=status,reason=detail,target=config['version'],mode=config['mode'],
+                    synthetic=True,stages=sorted(stages),**counts)
+                evidence.finish(result)
+                return result
+        else:
+            admit(state,config["version"],config["mode"])
+            if not client.ready(): raise ValueError("router_not_ready")
         if config['mode']=='baseline':
             if not client.verify_pair('stable',state['stable']): raise ValueError('backend_identity_not_ready')
             validate_payload(payload,client.metadata('stable'))
@@ -213,25 +294,40 @@ def execute(config, payload, client, evidence, clock=time.monotonic, sleep=time.
                         admit(state,config["version"],"baseline")
                         if not client.verify_pair('stable',state['stable']): raise ValueError('backend_identity_not_ready')
                     else:
-                        status,detail,seen=observation(state,config["version"]); stages.update(seen)
+                        status,detail,seen=automatic_observation(config,state) if automatic else observation(state,config["version"]); stages.update(seen)
                         if status: outcome,reason=status,detail; break
                     active=state.get("active")
                     evidence.emit("state",target=config["version"],phase=active["phase"] if active else "IDLE",weight=state["route"]["weight"],stages=sorted(stages))
                 sent=counts["requests"]+len(futures)
-                if sent>=config["requests"] and not futures:
+                if sent>=config["requests"] and not futures and not automatic:
                     if config["mode"]=="baseline": outcome,reason="PASS","baseline_smoke"; break
                     outcome,reason="BLOCKED","request_budget_exhausted"; break
                 active=state.get("active")
                 traffic=config["mode"]=="baseline" or (config["mode"]=="policy-test" and active and active["pair"]["model_version"]==config["version"] and active["phase"]=="RAMP")
                 if traffic and clock()>=next_send and len(futures)<config["concurrency"] and sent<config["requests"]:
                     if config['mode']=='policy-test':
+                        if 'expected_release' in config:
+                            state=client.state()
+                            status,detail,_=automatic_observation(config,state)
+                            if status or not state.get('active') or state['active']['phase']!='RAMP':
+                                next_poll=clock(); continue
+                            exact_ramp(config,state);active=state['active']
+                            if not client.ready():raise ValueError('router_not_ready')
+                            if not client.verify_pair('stable',state['stable']):raise ValueError('stable_identity_not_ready')
                         if not client.verify_pair('canary',active['pair']): raise ValueError('backend_identity_not_ready')
                         validate_payload(payload,client.metadata('canary'))
                         validate_payload(payload,client.metadata('stable'))
+                    if 'expected_release' in config:
+                        state=client.state()
+                        status,detail,_=automatic_observation(config,state)
+                        if status or not state.get('active') or state['active']['phase']!='RAMP':
+                            next_poll=clock(); continue
+                        exact_ramp(config,state)
+                        if cancelled():outcome,reason='BLOCKED','cancelled';break
                     futures.append(pool.submit(client.send,body,config["run_id"])); next_send=clock()+1/config["rps"]
                 sleep(0.05)
             for future in futures: collect(future)
-        if counts["errors"]: outcome,reason="FAIL","http_or_track_errors"
+        if counts["errors"] and not automatic: outcome,reason="FAIL","http_or_track_errors"
     except (ValueError,KeyError,TypeError): outcome,reason="BLOCKED","admission_or_contract_rejected"
     except (OSError,TimeoutError): outcome,reason="BLOCKED","backend_or_api_unavailable"
     result=dict(outcome=outcome,reason=reason,target=config["version"],mode=config["mode"],synthetic=config["mode"]!="observe",stages=sorted(stages),**counts)
@@ -241,9 +337,11 @@ def execute(config, payload, client, evidence, clock=time.monotonic, sleep=time.
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config",type=Path,required=True); parser.add_argument("--payload",type=Path,required=True)
+    inputs=parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument("--config",type=Path);inputs.add_argument("--config-json")
+    parser.add_argument("--payload",type=Path,required=True)
     parser.add_argument("--evidence",default="/evidence"); args=parser.parse_args()
-    config=json.loads(args.config.read_text()); payload=json.loads(args.payload.read_text())
+    config=json.loads(args.config_json if args.config_json is not None else args.config.read_text()); payload=json.loads(args.payload.read_text())
     stop=[False]
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:stop.__setitem__(0,True))
     result=execute(config,payload,Live(config["namespace"]),Evidence(args.evidence),cancelled=lambda:stop[0])

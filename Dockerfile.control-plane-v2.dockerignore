@@ -9,5 +9,11 @@ control_plane/**
 !canary/
 canary/**
 !canary/router.py
+!scripts/
+scripts/**
+!scripts/e2e_v2/
+scripts/e2e_v2/**
+!scripts/e2e_v2/*.py
+!scripts/e2e_v2/synthetic_credit_risk.json
 **/__pycache__/**
 **/*.pyc

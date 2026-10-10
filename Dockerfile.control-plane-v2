@@ -7,6 +7,7 @@ RUN python -m pip install --no-cache-dir --requirement requirements-v2.txt \
     && adduser -S -D -H -u 10001 -G app -h /nonexistent app
 COPY --chown=app:app control_plane/ ./control_plane/
 COPY --chown=app:app canary/router.py ./canary/router.py
+COPY --chown=app:app scripts/e2e_v2/ ./scripts/e2e_v2/
 USER 10001:10001
 # Deliberately refuses external effects without a reviewed role/--enable-live.
 ENTRYPOINT ["python", "-m", "control_plane.run_v2"]
