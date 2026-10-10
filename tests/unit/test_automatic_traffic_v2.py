@@ -119,8 +119,8 @@ def test_proposed_rbac_is_namespaced_and_generator_is_admission_constrained():
     assert policy['spec']['matchConditions'][0]['expression'].endswith("system:serviceaccount:production:model-release-controller-v2'")
     expressions='\n'.join(v['expression'] for v in policy['spec']['validations'])
     for required in (IMAGE,"model-release-traffic-v2","automountServiceAccountToken == true",
-                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit == '32Mi'",
-                     "envFrom","imagePullSecrets","resources.limits.memory == '256Mi'"):
+                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit == quantity('32Mi')",
+                     "envFrom","imagePullSecrets","resources.limits.memory == quantity('256Mi')"):
         assert required in expressions
     assert binding_policy['spec']['validationActions']==['Deny']
     assert binding_policy['spec']['matchResources']['namespaceSelector']['matchLabels']=={
