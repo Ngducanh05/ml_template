@@ -181,3 +181,16 @@ def test_policy_test_uses_candidate_metadata(tmp_path):
     clock=Clock(); result=execute(config('policy-test'),payload(),c,Evidence(tmp_path),clock,clock.sleep)
     assert result['requests']==3 and result['outcome']=='BLOCKED'
     assert {call.args for call in c.metadata.call_args_list}=={('canary',),('stable',)}
+
+
+def test_hpa_scale_out_keeps_ready_exact_version_eligible():
+    from scripts.e2e_v2.runner import deployment_matches
+    pair=dict(model_version='6',storage_uri='s3://bucket/model',runtime_digest='repo@sha256:'+'a'*64)
+    obj=dict(metadata=dict(generation=2),spec=dict(replicas=2,template=dict(metadata=dict(annotations={
+        'ml-template.io/model-version':'6','internal.serving.kserve.io/storage-initializer-sourceuri':pair['storage_uri']}),
+        spec=dict(containers=[dict(name='kserve-container',image=pair['runtime_digest'])]))),
+        status=dict(observedGeneration=2,updatedReplicas=2,replicas=2,readyReplicas=1,availableReplicas=1))
+    assert not deployment_matches(obj,pair)
+    assert deployment_matches(obj,pair,allow_scaling=True)
+    obj['status']['updatedReplicas']=1
+    assert not deployment_matches(obj,pair,allow_scaling=True)

@@ -171,14 +171,17 @@ def validate_payload(payload, metadata):
         raise ValueError("payload_too_large")
 
 
-def deployment_matches(obj, pair):
+def deployment_matches(obj, pair, allow_scaling=False):
     """Reject an old Ready replica masking a pending candidate rollout."""
     spec=obj.get('spec',{}); status=obj.get('status',{}); desired=spec.get('replicas',0)
     template=spec.get('template',{}); ann=template.get('metadata',{}).get('annotations',{})
     containers=template.get('spec',{}).get('containers',[])
-    return (desired>0 and status.get('observedGeneration',0)>=obj['metadata']['generation']
-        and status.get('updatedReplicas',0)==status.get('replicas',0)==desired
-        and status.get('readyReplicas',0)>=desired and status.get('availableReplicas',0)>=desired
+    actual=status.get('replicas',0)
+    minimum=1 if allow_scaling else desired
+    return (desired>0 and actual>0 and status.get('observedGeneration',0)>=obj['metadata']['generation']
+        and status.get('updatedReplicas',0)==actual
+        and (allow_scaling or actual==desired)
+        and status.get('readyReplicas',0)>=minimum and status.get('availableReplicas',0)>=minimum
         and ann.get('ml-template.io/model-version')==pair['model_version']
         and ann.get('internal.serving.kserve.io/storage-initializer-sourceuri')==pair['storage_uri']
         and any(c.get('name')=='kserve-container' and c.get('image')==pair['runtime_digest'] for c in containers))
@@ -219,12 +222,12 @@ class Live:
         name='credit-risk-'+lane+'-v2'
         with urlopen('http://'+name+'-predictor.'+self.namespace+'.svc/v2/models/'+name,timeout=3) as r:
             return json.load(r)
-    def verify_pair(self, lane, pair):
+    def verify_pair(self, lane, pair, allow_scaling=False):
         name='credit-risk-'+lane+'-v2-predictor'
         url=self.api+'/apis/apps/v1/namespaces/'+self.namespace+'/deployments/'+name
         request=Request(url,headers={'Authorization':'Bearer '+self.token.read_text().strip()})
         with urlopen(request,context=self.context,timeout=3) as response:
-            return deployment_matches(json.load(response),pair)
+            return deployment_matches(json.load(response),pair,allow_scaling)
     def send(self, body, run_id):
         request=Request(self.router+"/v2/models/credit-risk-classifier/infer",data=body,
             headers={"Content-Type":"application/json","X-E2E-Run":run_id,"X-Traffic-Origin":"synthetic"})
@@ -292,7 +295,8 @@ def execute(config, payload, client, evidence, clock=time.monotonic, sleep=time.
                     next_poll=clock()+1
                     if config["mode"]=="baseline":
                         admit(state,config["version"],"baseline")
-                        if not client.verify_pair('stable',state['stable']): raise ValueError('backend_identity_not_ready')
+                        if not client.verify_pair('stable',state['stable'],allow_scaling=True):
+                            sleep(0.1); next_poll=clock(); continue
                     else:
                         status,detail,seen=automatic_observation(config,state) if automatic else observation(state,config["version"]); stages.update(seen)
                         if status: outcome,reason=status,detail; break
