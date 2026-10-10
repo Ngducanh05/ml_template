@@ -41,6 +41,15 @@ def validate_config(config):
         raise ValueError("synthetic_quality_gate_opt_in_required")
 
 
+def validate_automatic_policy(config):
+    fields={"version","mode","run_id","namespace","rps","concurrency","requests","duration",
+            "api_retries","allow_synthetic_gate_traffic","expected_release","operator_approval"}
+    limits={"mode":"policy-test","namespace":"production","rps":2,"concurrency":1,
+            "requests":2000,"duration":900,"api_retries":0,"allow_synthetic_gate_traffic":True}
+    if set(config)!=fields or any(config.get(key)!=value for key,value in limits.items()):
+        raise ValueError("automatic_traffic_policy_mismatch")
+
+
 def exact_ramp(config,state):
     """Automatic runs bind one claimed authorization, never just a version number."""
     if 'expected_release' not in config:return
@@ -346,6 +355,8 @@ def main():
     parser.add_argument("--payload",type=Path,required=True)
     parser.add_argument("--evidence",default="/evidence"); args=parser.parse_args()
     config=json.loads(args.config_json if args.config_json is not None else args.config.read_text()); payload=json.loads(args.payload.read_text())
+    if args.config_json is not None:
+        validate_automatic_policy(config)
     stop=[False]
     for sig in (signal.SIGTERM,signal.SIGINT): signal.signal(sig,lambda *_:stop.__setitem__(0,True))
     result=execute(config,payload,Live(config["namespace"]),Evidence(args.evidence),cancelled=lambda:stop[0])

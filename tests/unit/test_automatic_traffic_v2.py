@@ -9,6 +9,7 @@ from control_plane.state import Conflict
 from test_controller_v2 import setup,until,OLD
 from test_e2e_runner_v2 import Clock,payload,metadata
 from scripts.e2e_v2.runner import execute,Evidence,Live
+from scripts.e2e_v2.runner import validate_automatic_policy
 
 IMAGE='596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:'+'e'*64
 
@@ -54,6 +55,7 @@ def test_authorized_ready_ramp_creates_exactly_one_durable_job_across_restart():
     assert job['spec']['backoffLimit']==0 and job['spec']['parallelism']==1
     assert job['spec']['activeDeadlineSeconds']==930
     assert job['spec']['template']['spec']['serviceAccountName']=='model-release-traffic-v2'
+    assert job['spec']['template']['spec']['automountServiceAccountToken'] is True
     assert binding(s.read()['active'])==config(s.read())['expected_release']
 
 
@@ -103,13 +105,40 @@ def test_runner_bounds_and_contract_fail_closed(tmp_path,case):
     if case!='timeout':client.send.assert_not_called()
 
 
-def test_proposed_rbac_is_namespaced_and_generator_readonly():
-    objects=proposed_rbac()['items'];roles=[o for o in objects if o['kind']=='Role']
-    assert len(roles)==2 and all(o['metadata']['namespace']=='production' for o in objects)
+def test_proposed_rbac_is_namespaced_and_generator_is_admission_constrained():
+    objects=proposed_rbac(IMAGE)['items'];roles=[o for o in objects if o['kind']=='Role']
+    assert len(roles)==2
+    assert all(o['metadata']['namespace']=='production' for o in objects if o['kind'] in ('ServiceAccount','Role','RoleBinding'))
     reader=next(o for o in roles if o['metadata']['name']=='model-release-traffic-v2')
     assert all(r['verbs']==['get'] and r['resourceNames'] for r in reader['rules'])
     creator=next(o for o in roles if o is not reader)
     assert creator['rules']==[dict(apiGroups=['batch'],resources=['jobs'],verbs=['get','create'])]
+    policy=next(o for o in objects if o['kind']=='ValidatingAdmissionPolicy')
+    binding_policy=next(o for o in objects if o['kind']=='ValidatingAdmissionPolicyBinding')
+    assert policy['spec']['failurePolicy']=='Fail'
+    assert policy['spec']['matchConditions'][0]['expression'].endswith("system:serviceaccount:production:model-release-controller-v2'")
+    expressions='\n'.join(v['expression'] for v in policy['spec']['validations'])
+    for required in (IMAGE,"model-release-traffic-v2","automountServiceAccountToken == true",
+                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit == '32Mi'",
+                     "envFrom","imagePullSecrets","resources.limits.memory == '256Mi'"):
+        assert required in expressions
+    assert binding_policy['spec']['validationActions']==['Deny']
+    assert binding_policy['spec']['matchResources']['namespaceSelector']['matchLabels']=={
+        'kubernetes.io/metadata.name':'production'}
+
+
+@pytest.mark.parametrize('field,value',[('rps',3),('concurrency',2),('requests',1999),('duration',899),
+                                           ('api_retries',1),('namespace','other'),('mode','baseline')])
+def test_automatic_config_budget_is_immutable(field,value):
+    s,_,_,_=ramp();cfg=config(s.read());cfg[field]=value
+    with pytest.raises(ValueError,match='automatic_traffic_policy_mismatch'):
+        validate_automatic_policy(cfg)
+
+
+def test_automatic_config_rejects_unreviewed_fields():
+    s,_,_,_=ramp();cfg=config(s.read());cfg['extra']='not-reviewed'
+    with pytest.raises(ValueError,match='automatic_traffic_policy_mismatch'):
+        validate_automatic_policy(cfg)
 
 
 @pytest.mark.parametrize('http_status',[200,500])

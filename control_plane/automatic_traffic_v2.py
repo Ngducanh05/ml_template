@@ -37,6 +37,7 @@ def render_job(active,image,approval):
     job['spec'].pop('ttlSecondsAfterFinished')
     job['spec'].update(parallelism=1,completions=1)
     pod=job['spec']['template']['spec'];pod['serviceAccountName']=SA
+    pod['automountServiceAccountToken']=True
     runner=pod['containers'][0]
     runner['command']=['python','-m','scripts.e2e_v2.runner']
     runner['args']=['--config-json',json.dumps(config,sort_keys=True),'--payload','/app/scripts/e2e_v2/synthetic_credit_risk.json']
@@ -83,16 +84,79 @@ class AutomaticTraffic:
         return 'EXISTS'
 
 
-def proposed_rbac():
-    """Proposal only. Job create cannot be restricted by resourceNames in Kubernetes."""
+def proposed_rbac(image):
+    """Proposal only: least-privilege RBAC plus a fail-closed Job content boundary."""
     from scripts.render_control_plane_v2 import NAMES
+    runtime_image(image)
     ns='production';controller=NAMES['controller']
     reader=dict(apiVersion='rbac.authorization.k8s.io/v1',kind='Role',metadata=dict(name=SA,namespace=ns),rules=[
         dict(apiGroups=[''],resources=['configmaps'],resourceNames=['model-release-state-v2'],verbs=['get']),
         dict(apiGroups=['apps'],resources=['deployments'],resourceNames=['credit-risk-stable-v2-predictor','credit-risk-canary-v2-predictor'],verbs=['get'])])
     creator=dict(apiVersion='rbac.authorization.k8s.io/v1',kind='Role',metadata=dict(name=SA+'-creator',namespace=ns),
         rules=[dict(apiGroups=['batch'],resources=['jobs'],verbs=['get','create'])])
-    objects=[dict(apiVersion='v1',kind='ServiceAccount',metadata=dict(name=SA,namespace=ns)),reader,creator]
+    policy_name=SA+'-jobs'
+    policy=dict(apiVersion='admissionregistration.k8s.io/v1',kind='ValidatingAdmissionPolicy',
+        metadata=dict(name=policy_name),spec=dict(failurePolicy='Fail',matchConstraints=dict(resourceRules=[dict(
+            apiGroups=['batch'],apiVersions=['v1'],operations=['CREATE'],resources=['jobs'],scope='Namespaced')]),
+        matchConditions=[dict(name='exact-controller',expression=(
+            "request.namespace == 'production' && request.userInfo.username == "
+            "'system:serviceaccount:production:%s'" % controller))],validations=[
+            dict(expression=("object.metadata.name.startsWith('v2-e2e-auto-') && "
+                "object.metadata.labels['app.kubernetes.io/name'] == 'v2-e2e-runner' && "
+                "object.metadata.annotations['ml-template.io/synthetic-policy-test'] == 'true' && "
+                "object.metadata.annotations['ml-template.io/authorization-id'].matches('^sha256:[0-9a-f]{64}$')"),
+                message='automatic traffic Job identity is immutable'),
+            dict(expression=("object.spec.backoffLimit == 0 && object.spec.parallelism == 1 && "
+                "object.spec.completions == 1 && object.spec.activeDeadlineSeconds == 930 && "
+                "!has(object.spec.ttlSecondsAfterFinished)"),message='automatic traffic Job lifecycle is bounded'),
+            dict(expression=("object.spec.template.spec.serviceAccountName == 'model-release-traffic-v2' && "
+                "object.spec.template.spec.automountServiceAccountToken == true && "
+                "object.spec.template.spec.restartPolicy == 'Never' && "
+                "!has(object.spec.template.spec.hostNetwork) && !has(object.spec.template.spec.hostPID) && "
+                "!has(object.spec.template.spec.hostIPC) && "
+                "(!has(object.spec.template.spec.initContainers) || size(object.spec.template.spec.initContainers) == 0)"),
+                message='automatic traffic Pod identity is constrained'),
+            dict(expression=("size(object.spec.template.spec.containers) == 1 && "
+                "object.spec.template.spec.containers[0].name == 'runner' && "
+                "object.spec.template.spec.containers[0].image == '%s' && "
+                "object.spec.template.spec.containers[0].command == ['python','-m','scripts.e2e_v2.runner'] && "
+                "size(object.spec.template.spec.containers[0].args) == 4 && "
+                "object.spec.template.spec.containers[0].args[0] == '--config-json' && "
+                "object.spec.template.spec.containers[0].args[2] == '--payload' && "
+                "object.spec.template.spec.containers[0].args[3] == '/app/scripts/e2e_v2/synthetic_credit_risk.json'" % image),
+                message='automatic traffic executable and image are immutable'),
+            dict(expression=("object.spec.template.spec.securityContext.runAsNonRoot == true && "
+                "object.spec.template.spec.securityContext.runAsUser == 10001 && "
+                "object.spec.template.spec.securityContext.runAsGroup == 10001 && "
+                "object.spec.template.spec.securityContext.fsGroup == 10001 && "
+                "object.spec.template.spec.securityContext.seccompProfile.type == 'RuntimeDefault' && "
+                "object.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation == false && "
+                "object.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem == true && "
+                "object.spec.template.spec.containers[0].securityContext.capabilities.drop == ['ALL']"),
+                message='automatic traffic security context is required'),
+            dict(expression=("size(object.spec.template.spec.containers[0].env) == 1 && "
+                "object.spec.template.spec.containers[0].env[0].name == 'AWS_EC2_METADATA_DISABLED' && "
+                "object.spec.template.spec.containers[0].env[0].value == 'true' && "
+                "(!has(object.spec.template.spec.containers[0].envFrom) || "
+                "size(object.spec.template.spec.containers[0].envFrom) == 0) && "
+                "(!has(object.spec.template.spec.imagePullSecrets) || size(object.spec.template.spec.imagePullSecrets) == 0) && "
+                "object.spec.template.spec.containers[0].resources.requests.cpu == '50m' && "
+                "object.spec.template.spec.containers[0].resources.requests.memory == '64Mi' && "
+                "object.spec.template.spec.containers[0].resources.limits.cpu == '500m' && "
+                "object.spec.template.spec.containers[0].resources.limits.memory == '256Mi'"),
+                message='automatic traffic environment and resources are constrained'),
+            dict(expression=("size(object.spec.template.spec.volumes) == 1 && "
+                "object.spec.template.spec.volumes[0].name == 'evidence' && "
+                "object.spec.template.spec.volumes[0].emptyDir.sizeLimit == '32Mi' && "
+                "size(object.spec.template.spec.containers[0].volumeMounts) == 1 && "
+                "object.spec.template.spec.containers[0].volumeMounts[0].name == 'evidence' && "
+                "object.spec.template.spec.containers[0].volumeMounts[0].mountPath == '/evidence'"),
+                message='automatic traffic volumes are constrained')]))
+    binding_policy=dict(apiVersion='admissionregistration.k8s.io/v1',kind='ValidatingAdmissionPolicyBinding',
+        metadata=dict(name=policy_name),spec=dict(policyName=policy_name,validationActions=['Deny'],
+            matchResources=dict(namespaceSelector=dict(matchLabels={'kubernetes.io/metadata.name':ns}))))
+    objects=[dict(apiVersion='v1',kind='ServiceAccount',metadata=dict(name=SA,namespace=ns)),reader,creator,
+             policy,binding_policy]
     for role,account in ((SA,SA),(SA+'-creator',controller)):
         objects.append(dict(apiVersion='rbac.authorization.k8s.io/v1',kind='RoleBinding',metadata=dict(name=role,namespace=ns),
             roleRef=dict(apiGroup='rbac.authorization.k8s.io',kind='Role',name=role),subjects=[dict(kind='ServiceAccount',name=account,namespace=ns)]))
