@@ -118,8 +118,19 @@ jobs:
           format: json
           output: trivy.json
           exit-code: '0'
-      - name: Enforce unsuppressed complete scan gate
-        run: python -c 'import json; from scripts.runtime_ci import require_clean_scan; require_clean_scan(json.load(open("trivy.json")))'
+      - name: Evaluate policy and write decision before blocking
+        if: always()
+        run: python -m scripts.runtime_security --request input/request.json --scan trivy.json --output security-decision.json
+      - name: Preserve security evidence even when blocked
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-security-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            trivy.json
+            security-decision.json
+          if-no-files-found: error
+          retention-days: 14
       - name: Archive immutable tested/scanned payload
         uses: actions/upload-artifact@v4
         with:
@@ -127,6 +138,7 @@ jobs:
           path: |
             runtime.tar
             trivy.json
+            security-decision.json
           retention-days: 14
   publish:
     needs: [validate, catalog, build]

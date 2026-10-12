@@ -1,0 +1,24 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject"
+      ],
+      "Resource": [
+        "arn:aws:s3:::mlflow-test-artifacts-quangcm/mlflow/workspaces/mlops/27/models/*/artifacts/python_env.yaml",
+        "arn:aws:s3:::mlflow-test-artifacts-quangcm/mlflow/workspaces/mlops/27/models/*/artifacts/requirements.txt",
+        "arn:aws:s3:::mlflow-test-artifacts-quangcm/mlflow/workspaces/mlops/27/models/*/artifacts/MLmodel"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages"
+      ],
+      "Resource": "arn:aws:ecr:ap-southeast-1:596432515999:repository/model-service"
+    }
+  ]
+}

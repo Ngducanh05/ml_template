@@ -20,3 +20,17 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Canary local/runtime artifacts
+canary/.local/
+canary/.runtime/
+canary/output/
+
+# Generated evidence
+evidence/singapore-rendered/
+
+# Local Kubernetes configuration
+/prod-demo-kubeconfig
+
+# Local CI validation outputs
+/ci-validation/

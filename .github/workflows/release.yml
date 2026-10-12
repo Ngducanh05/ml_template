@@ -1,40 +1,47 @@
 name: Release
-run-name: Release ${{ github.ref_name }} by ${{ github.actor }}
-
+run-name: Release ${{ github.ref_name }} model ${{ inputs.model_version }} by ${{ github.actor }}
 on:
   workflow_dispatch:
     inputs:
       ticket_reference:
-        description: Non-sensitive ticket/release reference; reviewer must verify approval
+        description: Non-sensitive approved ticket reference; reviewer must independently verify
         required: true
         type: string
-
+      model_version:
+        description: Exact latest eligible v2 candidate version
+        required: true
+        type: string
+      runtime_evidence_source:
+        description: Explicit independently verified security provenance source
+        required: true
+        type: choice
+        options: [workflow_run, retained_provenance]
+        default: workflow_run
+      runtime_provenance_digest:
+        description: Reviewed retained record sha256 digest; only for retained_provenance
+        required: false
+        type: string
+      runtime_evidence_run_id:
+        description: Successful Generic Runtime Build run; only for workflow_run
+        required: false
+        type: string
 permissions:
   contents: read
-
-# Serialize the complete release (including its approval wait) so neither the
-# shared validation target nor production can race another release.
 concurrency:
   group: model-service-release
   cancel-in-progress: false
-
+env:
+  TICKET_REFERENCE: ${{ inputs.ticket_reference }}
+  MODEL_VERSION: ${{ inputs.model_version }}
+  RUNTIME_EVIDENCE_SOURCE: ${{ inputs.runtime_evidence_source }}
+  RUNTIME_PROVENANCE_DIGEST: ${{ inputs.runtime_provenance_digest }}
+  RUNTIME_EVIDENCE_RUN_ID: ${{ inputs.runtime_evidence_run_id }}
+  PYTHONPATH: .:src
 jobs:
-  build:
-    name: Test, build artifact once and scan both images
+  validation:
+    name: Validate controlled release source and run required tests
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    outputs:
-      exact_runtime_image: ${{ steps.pin.outputs.exact_runtime_image }}
-      exact_artifact_image: ${{ steps.pin.outputs.exact_artifact_image }}
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-      ECR_RUNTIME_REPOSITORY: ${{ vars.ECR_RUNTIME_REPOSITORY }}
-      ECR_ARTIFACT_REPOSITORY: ${{ vars.ECR_ARTIFACT_REPOSITORY }}
-      RUNTIME_IMAGE_DIGEST: ${{ vars.RUNTIME_IMAGE_DIGEST }}
-      TRIVY_BLOCKING_SEVERITIES: ${{ vars.TRIVY_BLOCKING_SEVERITIES }}
-      TRIVY_IGNORE_UNFIXED: ${{ vars.TRIVY_IGNORE_UNFIXED }}
-      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -42,250 +49,105 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12.14"
-          cache: pip
-      - name: Validate trigger, source, version, ticket reference and policy
-        id: identity
-        run: python scripts/release.py prepare
-      - name: Install test dependencies
-        run: python -m pip install --requirement requirements.txt
-      - name: Run all required tests
-        id: tests
-        env:
-          PYTHONPATH: src
-        run: python -m pytest -q --junitxml=evidence/tests.xml
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Require the runtime digest and unused artifact release/build tags
-        run: python scripts/release.py registry-check
-      - name: Login to Amazon ECR
-        uses: aws-actions/amazon-ecr-login@v2
-      - uses: docker/setup-buildx-action@v3
-      - name: Build and push the artifact image exactly once
-        id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: Dockerfile.artifact
-          push: true
-          platforms: linux/amd64
-          # One platform manifest: its digest is also the init container image ID.
-          provenance: false
-          tags: |
-            ${{ steps.identity.outputs.artifact_image_name }}:${{ steps.identity.outputs.artifact_tag }}
-            ${{ steps.identity.outputs.artifact_image_name }}:${{ steps.identity.outputs.release_version }}
-          labels: |
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.version=${{ steps.identity.outputs.release_version }}
-      - name: Pin the artifact digest and preserve the runtime digest
-        id: pin
-        env:
-          ARTIFACT_IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
-        run: python scripts/release.py pin
-      - name: Scan the exact runtime registry image
-        id: scan_runtime
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_IMAGE_SRC: remote
-          TRIVY_IGNOREFILE: /dev/null
-          TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
-        with:
-          version: v0.70.0
-          image-ref: ${{ steps.pin.outputs.exact_runtime_image }}
-          scanners: vuln
-          format: json
-          output: evidence/trivy-runtime.json
-          severity: ${{ env.TRIVY_BLOCKING_SEVERITIES }}
-          ignore-unfixed: ${{ env.TRIVY_IGNORE_UNFIXED }}
-          trivy-config: /dev/null
-          exit-code: "1"
-      - name: Scan the exact artifact registry image
-        id: scan_artifact
-        if: ${{ !cancelled() && steps.pin.outcome == 'success' }}
-        continue-on-error: true
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        env:
-          TRIVY_IMAGE_SRC: remote
-          TRIVY_IGNOREFILE: /dev/null
-          TRIVY_IGNORE_UNFIXED: ${{ env.TRIVY_IGNORE_UNFIXED }}
-        with:
-          version: v0.70.0
-          image-ref: ${{ steps.pin.outputs.exact_artifact_image }}
-          scanners: vuln
-          format: json
-          output: evidence/trivy-artifact.json
-          severity: ${{ env.TRIVY_BLOCKING_SEVERITIES }}
-          ignore-unfixed: ${{ env.TRIVY_IGNORE_UNFIXED }}
-          trivy-config: /dev/null
-          exit-code: "1"
-      - name: Record and verify build evidence
-        if: ${{ always() && steps.identity.outcome == 'success' }}
-        env:
-          TEST_RESULT: ${{ steps.tests.outcome }}
-          ARTIFACT_PUSH_RESULT: ${{ steps.image.outcome }}
-          RUNTIME_SCAN_RESULT: ${{ steps.scan_runtime.outcome }}
-          ARTIFACT_SCAN_RESULT: ${{ steps.scan_artifact.outcome }}
-        run: python scripts/release.py finalize-build
-      - name: Preserve build evidence even on failure
+          python-version: '3.12.14'
+      - name: Validate immutable release tag, main ancestry, SHA, workflow and ticket
+        run: python -m scripts.release_v2 source
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q --junitxml=evidence/tests.xml
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: release-build-${{ github.run_id }}
+          name: release-validation-${{ github.run_id }}
           path: evidence/
-          if-no-files-found: error
           retention-days: 30
-
-  eks_dev:
-    name: Validate release digest pair on EKS dev
-    needs: build
-    runs-on: [self-hosted, Windows, X64, model-service-validation]
-    timeout-minutes: 15
-    env:
-      AWS_REGION: ${{ vars.AWS_REGION }}
-      AWS_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID }}
-      EKS_CLUSTER_NAME: ${{ vars.EKS_CLUSTER_NAME }}
-      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
-      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
-      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
-      DEPLOYMENT_ENVIRONMENT: eks-dev
-      KUBE_CONTEXT: arn:aws:eks:${{ vars.AWS_REGION }}:${{ vars.AWS_ACCOUNT_ID }}:cluster/${{ vars.EKS_CLUSTER_NAME }}
-      KUBE_NAMESPACE: ${{ vars.EKS_DEV_NAMESPACE }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.12.10"
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-      - name: Configure EKS kubeconfig
-        shell: powershell
-        run: |
-          aws sts get-caller-identity
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-          aws eks update-kubeconfig `
-            --region $env:AWS_REGION `
-            --name $env:EKS_CLUSTER_NAME
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-build-${{ github.run_id }}
-          path: evidence
-      - name: Deploy exact digest pair and verify EKS dev
-        shell: powershell
-        run: |
-          python scripts/release.py deploy
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Preserve EKS dev evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/eks-dev.json
           if-no-files-found: error
-          retention-days: 30
-
-  candidate:
-    name: Verify evidence, ticket reference and production protection
-    needs: [build, eks_dev]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  preflight:
+    name: Verify exact ServingPair, runtime build/security evidence and protected ticket gate
+    needs: validation
+    runs-on: [self-hosted, Linux, X64, mlops-release-readonly]
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: read
+      id-token: write
     env:
-      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
-      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
-      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12.14"
-      - uses: actions/download-artifact@v4
+          python-version: '3.12.14'
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
-          name: release-build-${{ github.run_id }}
-          path: evidence
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence
-      - name: Create eligible candidate; ticket approval remains the human's responsibility
-        run: python scripts/release.py candidate
+          role-to-assume: ${{ vars.RELEASE_CATALOG_READ_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - name: Read-only preproduction checks; never materialize production Canary
+        env:
+          RELEASE_STATE_READER_B64: ${{ secrets.RELEASE_STATE_READER_B64 }}
+        run: python -m scripts.release_v2 preflight
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: release-candidate-${{ github.run_id }}
-          path: evidence/candidate.json
-          if-no-files-found: error
+          path: evidence/
           retention-days: 30
-
+          if-no-files-found: error
   production:
-    name: Approve ticket, then deploy the validated digest pair
-    needs: [build, eks_dev, candidate]
-    # Configure required reviewers BEFORE running. See MANUAL_ACTIONS.md.
+    name: Human verifies approved ticket, then authorize exact v2 candidate
+    needs: [validation, preflight]
     environment:
       name: production
       url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    runs-on: [self-hosted, Linux, X64, model-service-production]
-    timeout-minutes: 15
+    runs-on: [self-hosted, Linux, X64, mlops-release-authorizer]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
     env:
-      EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
-      EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
-      TICKET_REFERENCE: ${{ inputs.ticket_reference }}
-      DEPLOYMENT_ENVIRONMENT: production
-      KUBE_CONTEXT: ${{ vars.PRODUCTION_KUBE_CONTEXT }}
-      KUBE_NAMESPACE: ${{ vars.PRODUCTION_NAMESPACE }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12.14"
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-build-${{ github.run_id }}
-          path: evidence
-      - uses: actions/download-artifact@v4
-        with:
-          name: release-eks-dev-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence
+          python-version: '3.12.14'
       - uses: actions/download-artifact@v4
         with:
           name: release-candidate-${{ github.run_id }}
           path: evidence
-      - name: Deploy automatically after approval and verify the production workload
-        env:
-          # Available only after the production Environment protection passes.
-          KUBECONFIG_B64: ${{ secrets.KUBECONFIG_B64 }}
-        run: python scripts/release.py deploy
-      - name: Preserve production evidence even on failure
-        if: always()
-        uses: actions/upload-artifact@v4
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+      - uses: aws-actions/configure-aws-credentials@v5
         with:
-          name: release-production-${{ github.run_id }}-${{ github.run_attempt }}
-          path: evidence/production.json
-          if-no-files-found: error
+          role-to-assume: ${{ vars.RELEASE_CATALOG_READ_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - name: Recheck native review, identity and security, then authorize through CAS
+        env:
+          RELEASE_STATE_WRITER_B64: ${{ secrets.RELEASE_STATE_WRITER_B64 }}
+        run: python -m scripts.release_v2 authorize
+      - name: Observe durable Controller outcome without changing workloads
+        env:
+          RELEASE_STATE_WRITER_B64: ${{ secrets.RELEASE_STATE_WRITER_B64 }}
+        run: python -m scripts.release_v2 observe
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-production-${{ github.run_id }}
+          path: evidence/
           retention-days: 30
-
+          if-no-files-found: error
   audit:
-    name: Record terminal release result
+    name: Audit authorization separately from rollout success
     if: always()
-    needs: [build, eks_dev, candidate, production]
+    needs: [validation, preflight, production]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -294,26 +156,21 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.12.14"
-      - name: Gather evidence that exists (a rejected job never executes)
+          python-version: '3.12.14'
+      - uses: actions/download-artifact@v4
         continue-on-error: true
-        uses: actions/download-artifact@v4
         with:
           pattern: release-*
           path: evidence
           merge-multiple: true
-      - name: Record success only when every prerequisite and production succeeded
+      - name: No deployment success without exact durable terminal evidence
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
-          EXACT_RUNTIME_IMAGE: ${{ needs.build.outputs.exact_runtime_image }}
-          EXACT_ARTIFACT_IMAGE: ${{ needs.build.outputs.exact_artifact_image }}
-          TICKET_REFERENCE: ${{ inputs.ticket_reference }}
-        run: python scripts/release.py summary
+        run: python -m scripts.release_v2 summary
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: release-audit-${{ github.run_id }}-${{ github.run_attempt }}
-          # Final audit failures must retain their failure report too.
+          name: release-audit-${{ github.run_id }}
           path: evidence/
-          if-no-files-found: error
           retention-days: 30
+          if-no-files-found: error

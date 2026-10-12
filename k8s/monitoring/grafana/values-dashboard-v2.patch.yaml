@@ -1,0 +1,9 @@
+# CONDITIONAL: only for a verified ml-observability chart installation.
+# Current live production Grafana is standalone and has no dashboard sidecar.
+grafana:
+  sidecar:
+    dashboards:
+      folderAnnotation: grafana_folder
+      provider:
+        foldersFromFilesStructure: true
+        allowUiUpdates: false

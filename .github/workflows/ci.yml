@@ -2,37 +2,204 @@ name: CI
 
 on:
   pull_request:
+    branches: [main]
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: read
 
-jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
+env:
+  PYTHONPATH: .:src
+
+jobs:
+  source-validation:
+    name: Source Validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12.14"
           cache: pip
-
-      - name: Install dependencies
+          cache-dependency-path: |
+            requirements.txt
+            requirements-runtime.txt
+      - name: Install test dependencies
         run: python -m pip install --requirement requirements.txt
+      - name: Check installed dependencies
+        run: python -m pip check
+      - name: Compile source without executing it
+        run: python -m compileall -q src control_plane scripts canary
+      - name: Check safe CLI entrypoints
+        run: |
+          python -m control_plane.run_v2 --help
+          python -m scripts.runtime_build_request --help
+          python -m scripts.ci_contracts --help
 
-      - name: Run tests
-        env:
-          PYTHONPATH: src
+  regression-tests:
+    name: Regression Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-runtime.txt
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Full regression
         run: python -m pytest -q
 
-  # Release builds and blocking scans live in release.yml. PR jobs never receive
-  # registry/cluster credentials or run on a privileged local runner.
+  v2-architecture-contracts:
+    name: V2 Architecture Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-runtime.txt
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Validate v2 ownership, identity and lifecycle contracts
+        run: >-
+          python -m pytest -q
+          tests/unit/test_runtime_resolver.py
+          tests/unit/test_state_v2.py
+          tests/unit/test_processor_v2.py
+          tests/unit/test_controller_v2.py
+          tests/unit/test_v2_boundaries.py
+          tests/unit/test_v2_render_and_fixture.py
+
+  v2-dry-e2e:
+    name: V2 Dry E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-runtime.txt
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Local automated release chain and native V2 proxy
+        run: >-
+          python -m pytest -q
+          tests/unit/test_release_v2_e2e.py
+          tests/unit/test_router_v2_http.py
+
+  manifest-contracts:
+    name: Manifest Contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-runtime.txt
+      - name: Install test dependencies
+        run: python -m pip install --requirement requirements.txt
+      - name: Render and validate offline manifests
+        run: python -m scripts.ci_contracts manifests --output "$RUNNER_TEMP/v2-manifests"
+      - name: Test CI contract guards
+        run: python -m pytest -q tests/unit/test_ci_contracts.py
+
+  control-plane-image-security:
+    name: Control Plane Image Security
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12.14"
+      - name: Build local control-plane image only
+        run: docker build --platform linux/amd64 --file Dockerfile.control-plane-v2 --tag ml-template-control-plane-v2:ci .
+      - name: Smoke test without network or live effects
+        run: python -m scripts.ci_contracts image-smoke --image ml-template-control-plane-v2:ci
+      - name: Scan local control-plane image (blocking, no exceptions)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        env:
+          TRIVY_IMAGE_SRC: docker
+          TRIVY_IGNOREFILE: /dev/null
+          TRIVY_IGNORE_UNFIXED: "false"
+        with:
+          version: v0.70.0
+          image-ref: ml-template-control-plane-v2:ci
+          scanners: vuln
+          format: json
+          output: trivy-control-plane-v2.json
+          severity: HIGH,CRITICAL
+          ignore-unfixed: "false"
+          trivy-config: /dev/null
+          exit-code: "1"
+      - name: Preserve scan findings even on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-plane-v2-trivy
+          path: trivy-control-plane-v2.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  ci-gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    if: always()
+    needs:
+      - source-validation
+      - regression-tests
+      - v2-architecture-contracts
+      - v2-dry-e2e
+      - manifest-contracts
+      - control-plane-image-security
+    steps:
+      - name: Require every validation to succeed
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          python - <<'PY'
+          import json, os, sys
+          results = json.loads(os.environ["NEEDS_JSON"])
+          expected = {"source-validation", "regression-tests", "v2-architecture-contracts",
+                      "v2-dry-e2e", "manifest-contracts", "control-plane-image-security"}
+          failed = {name: results.get(name, {}).get("result", "missing") for name in expected
+                    if results.get(name, {}).get("result") != "success"}
+          print(json.dumps({"required_results": results, "failures": failed}, indent=2))
+          sys.exit(0 if set(results) == expected and not failed else 1)
+          PY

@@ -1,0 +1,8 @@
+{
+  "AWS_PROFILE": "ml-template-dev",
+  "AWS_ACCOUNT_ID": "596432515999",
+  "AWS_REGION": "ap-southeast-1",
+  "EKS_CLUSTER": "ml-template-dev-sg",
+  "KUBE_CONTEXT": "ml-template-dev-sg",
+  "K8S_NAMESPACE": "production"
+}

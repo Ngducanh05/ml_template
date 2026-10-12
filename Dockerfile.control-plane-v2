@@ -1,0 +1,14 @@
+FROM python:3.12.14-alpine3.24@sha256:9b8dad7f66b5c7751df6cb7a64a07812e86bed85d0116efe82b3a11209f1440d
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 AWS_EC2_METADATA_DISABLED=true
+WORKDIR /app
+COPY control_plane/requirements*.txt ./
+RUN python -m pip install --no-cache-dir --requirement requirements-v2.txt \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app -h /nonexistent app
+COPY --chown=app:app control_plane/ ./control_plane/
+COPY --chown=app:app canary/router.py ./canary/router.py
+COPY --chown=app:app scripts/e2e_v2/ ./scripts/e2e_v2/
+USER 10001:10001
+# Deliberately refuses external effects without a reviewed role/--enable-live.
+ENTRYPOINT ["python", "-m", "control_plane.run_v2"]
+CMD ["--help"]

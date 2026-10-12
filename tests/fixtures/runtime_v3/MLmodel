@@ -1,0 +1,44 @@
+artifact_path: s3://mlflow-test-artifacts-quangcm/mlflow/workspaces/mlops/27/models/m-5ef2447607c84c5690dee1c2f6ced582/artifacts
+flavors:
+  python_function:
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.sklearn
+    model_path: model.skops
+    predict_fn: predict
+    python_version: 3.12.14
+  sklearn:
+    code: null
+    pickled_model: model.skops
+    serialization_format: skops
+    sklearn_version: 1.7.2
+    skops_trusted_types:
+    - sklearn.tree._tree.Tree
+    - sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor
+is_signature_from_type_hint: false
+mlflow_version: 3.14.0
+model_id: m-5ef2447607c84c5690dee1c2f6ced582
+model_size_bytes: 6985540
+model_uuid: m-5ef2447607c84c5690dee1c2f6ced582
+prompts: null
+run_id: aafd1d6d6f9c4393bb8d812f20879fd7
+saved_input_example_info:
+  artifact_path: input_example.json
+  pandas_orient: split
+  serving_input_path: serving_input_example.json
+  type: dataframe
+signature:
+  inputs: '[{"type": "double", "name": "RevolvingUtilizationOfUnsecuredLines", "required":
+    true}, {"type": "long", "name": "age", "required": true}, {"type": "long", "name":
+    "NumberOfTime30-59DaysPastDueNotWorse", "required": true}, {"type": "double",
+    "name": "DebtRatio", "required": true}, {"type": "double", "name": "MonthlyIncome",
+    "required": false}, {"type": "long", "name": "NumberOfOpenCreditLinesAndLoans",
+    "required": true}, {"type": "long", "name": "NumberOfTimes90DaysLate", "required":
+    true}, {"type": "long", "name": "NumberRealEstateLoansOrLines", "required": true},
+    {"type": "long", "name": "NumberOfTime60-89DaysPastDueNotWorse", "required": true},
+    {"type": "double", "name": "NumberOfDependents", "required": false}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "int64", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-10-06 04:37:28.180374'

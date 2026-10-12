@@ -1,0 +1,14 @@
+# Standalone monitoring additions
+
+These sources extend an existing standalone Prometheus. They do not install an Operator, ServiceMonitors or another monitoring stack.
+
+- `ksm/Dockerfile`: checksum-pinned upstream KSM2.20.0 source, pinned Go1.26.9 and distroless bases, security updates to x/crypto0.55.0 and grpc1.83.2, upstream store/options tests, non-root final image. The image is a downstream dependency-patched build, not an unmodified upstream release. Scan the exact output with HIGH/CRITICAL fail-closed before publishing the same bytes. Never assume a historical scan remains current.
+- `ksm/resources.yaml`: template for one Pod/Service, namespace-scoped Pod/Deployment/HPA list/watch and cluster-scoped node list/watch. No secrets, ConfigMaps, other namespaces, or write permissions. Render using `python -m scripts.render_standalone_ksm --image <repository>@sha256:<digest> --output <local-review.json>`; tags alone are rejected.
+- `kubelet-rbac.yaml`: dedicated ServiceAccount with node discovery and nodes/metrics GET, without nodes/proxy. Before assigning it to Prometheus, use a bounded temporary Pod/Job under this identity to verify direct10250 HTTPS against every node using the cluster CA and projected token. No insecure-skip-verify, static token, insecure port or broad proxy fallback.
+- `scripts/prepare_standalone_prometheus.py`: reads local captured ConfigMap/Deployment, preserves jobs and alert contents, emits new immutable config plus resourceVersion-guarded targeted patch and guarded rollback. `--infrastructure` adds KSM and kubelet/cAdvisor jobs and the preflight identity. Run promtool and server dry-run before review. Local promtool syntax-only validation does not verify the projected credential files; the in-cluster preflight is separate evidence.
+
+Every config-reference change rolls the Deployment. For emptyDir TSDB this destroys history. A previous approval for a different config does not authorize additional history loss. Review the exact diff and preservation/loss decision before each rollout. Configuration rollback does not recover deleted samples. Keep raw target, state, RBAC inspection, source metric output and scan evidence local.
+
+KSM waiting-reason metrics can be absent when no container is waiting. Candidate/elapsed release metrics can be absent while idle. Absence is not a healthy zero. Verify HPA min/max/current/desired/target labels against the installed KSM; verify usage comes from kubelet/cAdvisor, not KSM. Node totals use root cgroup only, avoiding sums of parent and child groups.
+
+References: [KSM flags](https://github.com/kubernetes/kube-state-metrics/blob/v2.20.0/docs/developer/cli-arguments.md), [KSM HPA metric contract](https://github.com/kubernetes/kube-state-metrics/blob/v2.20.0/docs/metrics/workload/horizontalpodautoscaler-metrics.md), [Kubelet authorization](https://kubernetes.io/docs/reference/access-authn-authz/kubelet-authn-authz/).

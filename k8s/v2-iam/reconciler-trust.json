@@ -1,0 +1,22 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "pods.eks.amazonaws.com"
+      },
+      "Action": [
+        "sts:AssumeRole",
+        "sts:TagSession"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestTag/eks-cluster-arn": "arn:aws:eks:ap-southeast-1:596432515999:cluster/ml-template-dev-sg",
+          "aws:RequestTag/kubernetes-namespace": "production",
+          "aws:RequestTag/kubernetes-service-account": "model-champion-reconciler-v2"
+        }
+      }
+    }
+  ]
+}

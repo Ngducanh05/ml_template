@@ -1,0 +1,1 @@
+{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["ecr:DescribeRepositories","ecr:DescribeImages","ecr:BatchGetImage"],"Resource":"arn:aws:ecr:ap-southeast-1:596432515999:repository/model-service"}]}
