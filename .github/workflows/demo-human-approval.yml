@@ -32,9 +32,11 @@ jobs:
         run: python -m pytest tests/unit/test_release_flow.py -q
 
       - name: Candidate eligible
+        env:
+          TICKET_REFERENCE: ${{ inputs.ticket_reference }}
         run: |
           echo "Automatic validation passed."
-          echo "Ticket: ${{ inputs.ticket_reference }}"
+          printf 'Ticket: %s\n' "$TICKET_REFERENCE"
           echo "Candidate is waiting for human approval."
 
   human-approval:

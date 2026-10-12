@@ -3,11 +3,21 @@
 Project demo dùng để xây dựng và hiểu flow triển khai một ML model từ một
 model artifact có sẵn thành model service chạy trên Kubernetes.
 
-The active Week 3 release reuses an approved runtime image digest and builds only
-the model artifact image. Both exact images are scanned, validated on EKS dev,
-and promoted unchanged after human production approval. See the current
-[release configuration](MANUAL_ACTIONS.md#week-3-dual-image-release-configuration).
-The Week 1 serving flow is unchanged; later Week 2 sections are historical.
+The current release entrypoint is the manually dispatched `release.yml`.
+It verifies the selected v2 candidate and its runtime security evidence, then
+requires protected production approval before recording durable
+`APPROVED_FOR_RELEASE` authorization. The v2 controller owns rollout; the
+release workflow does not rebuild images. See the authoritative
+[release authorization contract](docs/release-authorization-v2.md) and
+[generic runtime CI](docs/runtime-build-ci.md) for the current implementation.
+Source and test results do not prove that these components are deployed.
+
+## Historical serving and Week 1-3 walkthrough
+
+The remainder of this README preserves the earlier serving tutorial and release
+designs. References below to the "active" Week 3 flow, build/deploy steps and
+recorded PASS results describe those historical checkpoints. For current
+release operation, use the v2 documents linked above.
 
 ```text
 Existing Model Artifact

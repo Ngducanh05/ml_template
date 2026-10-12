@@ -28,3 +28,9 @@ canary/output/
 
 # Generated evidence
 evidence/singapore-rendered/
+
+# Local Kubernetes configuration
+/prod-demo-kubeconfig
+
+# Local CI validation outputs
+/ci-validation/

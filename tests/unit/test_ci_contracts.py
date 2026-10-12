@@ -124,3 +124,20 @@ def test_workload_identity_security_drift(rendered, name, violation):
     elif violation == "extra-subject": binding["subjects"].append(dict(binding["subjects"][0]))
     with pytest.raises(ValueError):
         validate_manifests(release, control)
+
+
+def test_demo_ticket_is_data_not_shell_source(tmp_path):
+    import shutil
+    workflow = yaml.load((ROOT/'.github/workflows/demo-human-approval.yml').read_text(), Loader=yaml.BaseLoader)
+    step = next(s for s in workflow['jobs']['validation']['steps'] if s.get('name') == 'Candidate eligible')
+    assert step['env']['TICKET_REFERENCE'] == '${{ inputs.ticket_reference }}'
+    assert '${{' not in step['run']
+    bash = str(Path(os.environ.get('ProgramFiles', 'C:/Program Files'))/'Git/bin/bash.exe') if os.name == 'nt' else shutil.which('bash')
+    if not bash or not Path(bash).is_file():
+        pytest.skip('Bash unavailable for workflow execution')
+    payload = '$(touch injected); `touch injected2` "quoted"'
+    result = subprocess.run([bash, '-c', step['run']], cwd=tmp_path,
+                            env={**os.environ, 'TICKET_REFERENCE': payload}, capture_output=True, text=True, check=True)
+    assert 'Ticket: ' + payload in result.stdout
+    assert not (tmp_path/'injected').exists()
+    assert not (tmp_path/'injected2').exists()
