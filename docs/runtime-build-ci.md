@@ -8,7 +8,9 @@ Historical runtime-x-hardened-v1 catalog hits remain first priority. Only a MISS
 
 ## Workflow
 
-`runtime-build.yml` is manually dispatched with a normalized request copied from a real BUILD_REQUIRED entry (or an explicitly labeled isolated test). No GitHub token/dispatcher or builder is added to EKS. Normal processor polling rechecks the catalog after publication; no state edit/recovery command is required for BUILD_REQUIRED.
+`runtime-build.yml` remains the only builder. On `main`, `runtime-build-trigger.yml` runs every 15 minutes on the existing isolated read-only release runner. It reads the exact latest BUILD_REQUIRED request, validates the canonical contract/fingerprint, checks ECR first, and uses the repository-scoped `GITHUB_TOKEN` (`actions:write`) to dispatch this workflow with `publish=true`. No GitHub token/dispatcher or builder is added to EKS. Normal processor polling rechecks the catalog after publication; no state edit/recovery command is required for BUILD_REQUIRED.
+
+The workflow run title and concurrency key contain the exact fingerprint. The trigger treats GitHub's retained workflow history as the dispatch receipt: an active or successful publication attempt is never redispatched, and any terminal failure (including Security BLOCK) blocks automatic retry. A reviewed operator may investigate and explicitly retry; the scheduler never turns a blocked contract into an infinite build loop. History queries are bounded to 100 publication runs and fail closed when that bound is exceeded rather than losing dedup evidence.
 
 1. Validate independently, create an allowlisted three-file Docker context plus ignore file. No repository/model/S3 bytes enter it.
 2. For publication mode, query the immutable ECR fingerprint tag before building. HIT skips the build. AWS errors are not MISS. The repository must have immutable tags without exclusions.
@@ -17,7 +19,7 @@ Historical runtime-x-hardened-v1 catalog hits remain first priority. Only a MISS
 5. Scan the exact archive, no ignore file or unfixed suppression; evaluate the explicit vulnerability policy below and block on missing complete reports. Preserve successful exact archive for publication. The frozen environment and image archive record the resolved first-build environment; retries use catalog HIT and do not rerun a potentially changed resolver.
 6. A protected publication job loads that archive, checks scan config/layer identity, pushes those bytes, verifies registry manifest/config against the scan and uses the existing collision-checking Catalog.publish. Same fingerprint/different digest is rejected. Concurrent build races never overwrite eligibility.
 
-`publish=false` performs isolated build/test/security only. It intentionally has no AWS lookup/push. `publish=true` requires reviewed OIDC and environment protection. No workflow dispatch, IAM creation or live BUILD_REQUIRED release is implied by source tests.
+`publish=false` performs isolated build/test/security only. It intentionally has no AWS lookup/push. Automated BUILD_REQUIRED dispatch always requests `publish=true`. The catalog job uses the existing ECR read-only OIDC role and can proceed to build/scan without publication rights. Only a Security PASS reaches the separate `runtime-build-publish` job, whose write role and protected Environment approval remain mandatory. Source tests do not configure IAM, runners, secrets, environment protection, or activate the scheduled workflow on `main`.
 
 ## Local commands
 
@@ -33,6 +35,8 @@ Then scan the archive and evaluate scripts.runtime_security with the canonical r
 ## OIDC approval boundary
 
 Use a dedicated role trusted only for the exact repository and protected `runtime-build-publish` environment, audience sts.amazonaws.com, session900seconds. Configure required reviewers and permitted deployment branches before granting trust; environment-name trust alone does not restrict a workflow file. Repository/environment admins remain trusted publishers.
+
+The separate `RELEASE_CATALOG_READ_ROLE_ARN` remains read-only. Its proposed trust adds the exact `refs/heads/main` subject so the scheduled trigger and catalog job can query only the existing runtime repository. It has no ECR upload or tag mutation actions. This IAM trust change, runner availability, and repository variable configuration require explicit owner approval before activation.
 
 Permissions: ECR login on its required wildcard resource; only DescribeRepositories/DescribeImages/BatchGetImage/BatchCheckLayerAvailability/GetDownloadUrlForLayer/InitiateLayerUpload/UploadLayerPart/CompleteLayerUpload/PutImage on the one runtime repository. No ECR delete, repository creation, IAM mutation, S3, EKS, SQS or static AWS secrets. Exact account-bound trust/permissions are rendered locally for owner review; never automatically applied. The protected environment variable RUNTIME_BUILD_ROLE_ARN selects the approved role.
 

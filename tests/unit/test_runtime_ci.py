@@ -73,7 +73,9 @@ def test_build_job_has_no_oidc_or_aws_identity():
     assert 'configure-aws-credentials' not in json.dumps(build)
     assert 'needs.catalog.outputs.build_required' in build['if']
     assert doc['jobs']['publish']['environment']=='runtime-build-publish'
-    assert doc['jobs']['catalog']['environment']=='runtime-build-publish'
+    assert 'environment' not in doc['jobs']['catalog']
+    assert 'RELEASE_CATALOG_READ_ROLE_ARN' in json.dumps(doc['jobs']['catalog'])
+    assert 'RUNTIME_BUILD_ROLE_ARN' not in json.dumps(doc['jobs']['catalog'])
 
 
 def test_archive_config_identity_is_derived_from_bytes(tmp_path):
