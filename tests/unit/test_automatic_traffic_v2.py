@@ -119,8 +119,8 @@ def test_proposed_rbac_is_namespaced_and_generator_is_admission_constrained():
     assert policy['spec']['matchConditions'][0]['expression'].endswith("system:serviceaccount:production:model-release-controller-v2'")
     expressions='\n'.join(v['expression'] for v in policy['spec']['validations'])
     for required in (IMAGE,"model-release-traffic-v2","automountServiceAccountToken == true",
-                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit.orValue(quantity('0')) == quantity('32Mi')",
-                     "envFrom","imagePullSecrets","resources.limits.memory.orValue(quantity('0')) == quantity('256Mi')"):
+                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","has(object.spec.template.spec.volumes[0].emptyDir.sizeLimit)",
+                     "envFrom","imagePullSecrets","'memory' in object.spec.template.spec.containers[0].resources.limits"):
         assert required in expressions
     assert binding_policy['spec']['validationActions']==['Deny']
     assert binding_policy['spec']['matchResources']['namespaceSelector']['matchLabels']=={
@@ -273,10 +273,50 @@ def test_budget_exhaustion_observes_terminal_and_wrong_baseline_blocks(tmp_path)
     result=execute(cfg,payload(),client,Evidence(tmp_path/'baseline'),clock,clock.sleep)
     assert result['outcome']=='BLOCKED';client.send.assert_not_called()
 
-def test_admission_policy_uses_optional_cel_for_optional_resource_fields():
+def test_admission_policy_guards_every_optional_resource_field():
     objects=proposed_rbac(IMAGE)['items']
     policy=next(o for o in objects if o['kind']=='ValidatingAdmissionPolicy')
     expressions=' '.join(v['expression'] for v in policy['spec']['validations'])
-    assert ".?resources.requests.cpu.orValue(quantity('0'))" in expressions
-    assert ".?resources.limits.memory.orValue(quantity('0'))" in expressions
-    assert ".?emptyDir.sizeLimit.orValue(quantity('0'))" in expressions
+    for required in ("has(object.spec.template.spec.containers[0].resources)",
+                     "has(object.spec.template.spec.containers[0].resources.requests)",
+                     "'cpu' in object.spec.template.spec.containers[0].resources.requests",
+                     "'memory' in object.spec.template.spec.containers[0].resources.requests",
+                     "has(object.spec.template.spec.containers[0].resources.limits)",
+                     "'cpu' in object.spec.template.spec.containers[0].resources.limits",
+                     "'memory' in object.spec.template.spec.containers[0].resources.limits",
+                     "has(object.spec.template.spec.volumes[0].emptyDir)",
+                     "has(object.spec.template.spec.volumes[0].emptyDir.sizeLimit)"):
+        assert required in expressions
+    assert '.?resources' not in expressions and '.?emptyDir' not in expressions
+
+
+def resource_volume_fixture_allowed(job):
+    try:
+        pod=job['spec']['template']['spec'];container=pod['containers'][0]
+        resources=container['resources'];requests=resources['requests'];limits=resources['limits']
+        volume=pod['volumes'][0]
+        return (requests=={'cpu':'50m','memory':'64Mi'} and
+                limits=={'cpu':'500m','memory':'256Mi'} and
+                volume['name']=='evidence' and volume['emptyDir']['sizeLimit']=='32Mi')
+    except (KeyError,IndexError,TypeError):
+        return False
+
+
+@pytest.mark.parametrize('mutation',[
+    'missing_resources','missing_requests','missing_limits','wrong_request_cpu','wrong_request_memory',
+    'wrong_limit_cpu','wrong_limit_memory','missing_empty_dir','missing_size_limit','wrong_size_limit'])
+def test_admission_resource_volume_fixtures_fail_closed(mutation):
+    s,_,_,_=ramp();job=render_job(s.read()['active'],IMAGE,'DEMO-APPROVAL-1')
+    assert resource_volume_fixture_allowed(job)
+    pod=job['spec']['template']['spec'];container=pod['containers'][0];volume=pod['volumes'][0]
+    if mutation=='missing_resources':container.pop('resources')
+    elif mutation=='missing_requests':container['resources'].pop('requests')
+    elif mutation=='missing_limits':container['resources'].pop('limits')
+    elif mutation=='wrong_request_cpu':container['resources']['requests']['cpu']='51m'
+    elif mutation=='wrong_request_memory':container['resources']['requests']['memory']='65Mi'
+    elif mutation=='wrong_limit_cpu':container['resources']['limits']['cpu']='501m'
+    elif mutation=='wrong_limit_memory':container['resources']['limits']['memory']='257Mi'
+    elif mutation=='missing_empty_dir':volume.pop('emptyDir')
+    elif mutation=='missing_size_limit':volume['emptyDir'].pop('sizeLimit')
+    else:volume['emptyDir']['sizeLimit']='33Mi'
+    assert not resource_volume_fixture_allowed(job)
