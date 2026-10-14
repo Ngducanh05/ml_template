@@ -126,7 +126,35 @@ def test_dispatch_uses_main_existing_workflow_and_publish_gate(monkeypatch):
                                      "technical_contract": request, "publish": True}})
 
 
-def test_history_bound_fails_closed(monkeypatch):
-    monkeypatch.setattr(trigger, "github_request", lambda path: {"total_count": 101, "workflow_runs": []})
-    with pytest.raises(ValueError, match="bounded"):
+def test_history_over_one_page_is_fully_deduplicated(monkeypatch):
+    calls = []
+    pages = {
+        1: {"total_count": 101, "workflow_runs": [{"id": i} for i in range(100)]},
+        2: {"total_count": 101, "workflow_runs": [{"id": 100}]},
+    }
+    def request(path):
+        calls.append(path)
+        return pages[int(path.rsplit("page=", 1)[1])]
+    monkeypatch.setattr(trigger, "github_request", request)
+    assert len(trigger.workflow_runs()) == 101
+    assert calls[-1].endswith("per_page=100&page=2")
+
+
+@pytest.mark.parametrize("failure", ["too-many", "changed-total", "duplicate", "incomplete"])
+def test_history_pagination_inconsistency_fails_closed(monkeypatch, failure):
+    first = {"total_count": 101, "workflow_runs": [{"id": i} for i in range(100)]}
+    second = {"total_count": 101, "workflow_runs": [{"id": 100}]}
+    if failure == "too-many":
+        first = {"total_count": trigger.MAX_HISTORY_RUNS + 1, "workflow_runs": []}
+    elif failure == "changed-total":
+        second["total_count"] = 102
+    elif failure == "duplicate":
+        second["workflow_runs"] = [{"id": 99}]
+    elif failure == "incomplete":
+        second["workflow_runs"] = []
+    monkeypatch.setattr(
+        trigger, "github_request",
+        lambda path: first if path.endswith("page=1") else second,
+    )
+    with pytest.raises(ValueError):
         trigger.workflow_runs()

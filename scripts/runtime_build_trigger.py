@@ -26,6 +26,8 @@ RUN_PREFIX = "Runtime build publish-true "
 ACTIVE = frozenset(("queued", "in_progress", "pending", "requested", "waiting"))
 TERMINAL_FAILURE = frozenset(("failure", "cancelled", "timed_out", "action_required", "stale", "skipped"))
 OUT = Path("evidence/runtime-build-trigger.json")
+HISTORY_PAGE_SIZE = 100
+MAX_HISTORY_RUNS = 10_000
 
 
 def require(condition, message):
@@ -111,12 +113,36 @@ def github_request(path, *, method="GET", data=None):
 
 
 def workflow_runs():
-    result = github_request(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&branch=main&per_page=100")
-    require(isinstance(result, dict) and isinstance(result.get("workflow_runs"), list),
-            "Malformed GitHub workflow history")
-    require(result.get("total_count", 0) <= 100,
-            "Runtime build history exceeds bounded automatic dedup window")
-    return result["workflow_runs"]
+    runs = []
+    run_ids = set()
+    total = None
+    page = 1
+    while total is None or len(runs) < total:
+        result = github_request(
+            f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&branch=main"
+            f"&per_page={HISTORY_PAGE_SIZE}&page={page}"
+        )
+        require(isinstance(result, dict) and isinstance(result.get("workflow_runs"), list),
+                "Malformed GitHub workflow history")
+        observed_total = result.get("total_count")
+        require(type(observed_total) is int and 0 <= observed_total <= MAX_HISTORY_RUNS,
+                "Runtime build history exceeds bounded automatic dedup window")
+        if total is None:
+            total = observed_total
+        require(observed_total == total, "GitHub workflow history changed during pagination")
+        batch = result["workflow_runs"]
+        require(len(batch) <= HISTORY_PAGE_SIZE, "GitHub workflow history page exceeds bound")
+        require(batch or len(runs) == total, "Incomplete GitHub workflow history")
+        for run in batch:
+            run_id = run.get("id") if isinstance(run, dict) else None
+            require(run_id is not None and run_id not in run_ids,
+                    "Invalid or duplicate GitHub workflow run")
+            run_ids.add(run_id)
+            runs.append(run)
+        require(len(runs) <= total, "GitHub workflow history exceeds reported total")
+        page += 1
+    require(len(runs) == total, "Incomplete GitHub workflow history")
+    return runs
 
 
 def state_store():
