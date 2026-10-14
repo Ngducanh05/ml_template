@@ -140,14 +140,14 @@ def proposed_rbac(image):
                 "(!has(object.spec.template.spec.containers[0].envFrom) || "
                 "size(object.spec.template.spec.containers[0].envFrom) == 0) && "
                 "(!has(object.spec.template.spec.imagePullSecrets) || size(object.spec.template.spec.imagePullSecrets) == 0) && "
-                "object.spec.template.spec.containers[0].resources.requests.cpu == quantity('50m') && "
-                "object.spec.template.spec.containers[0].resources.requests.memory == quantity('64Mi') && "
-                "object.spec.template.spec.containers[0].resources.limits.cpu == quantity('500m') && "
-                "object.spec.template.spec.containers[0].resources.limits.memory == quantity('256Mi')"),
+                "object.spec.template.spec.containers[0].?resources.requests.cpu.orValue(quantity('0')) == quantity('50m') && "
+                "object.spec.template.spec.containers[0].?resources.requests.memory.orValue(quantity('0')) == quantity('64Mi') && "
+                "object.spec.template.spec.containers[0].?resources.limits.cpu.orValue(quantity('0')) == quantity('500m') && "
+                "object.spec.template.spec.containers[0].?resources.limits.memory.orValue(quantity('0')) == quantity('256Mi')"),
                 message='automatic traffic environment and resources are constrained'),
             dict(expression=("size(object.spec.template.spec.volumes) == 1 && "
                 "object.spec.template.spec.volumes[0].name == 'evidence' && "
-                "object.spec.template.spec.volumes[0].emptyDir.sizeLimit == quantity('32Mi') && "
+                "object.spec.template.spec.volumes[0].?emptyDir.sizeLimit.orValue(quantity('0')) == quantity('32Mi') && "
                 "size(object.spec.template.spec.containers[0].volumeMounts) == 1 && "
                 "object.spec.template.spec.containers[0].volumeMounts[0].name == 'evidence' && "
                 "object.spec.template.spec.containers[0].volumeMounts[0].mountPath == '/evidence'"),

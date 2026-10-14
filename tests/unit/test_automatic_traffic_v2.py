@@ -119,8 +119,8 @@ def test_proposed_rbac_is_namespaced_and_generator_is_admission_constrained():
     assert policy['spec']['matchConditions'][0]['expression'].endswith("system:serviceaccount:production:model-release-controller-v2'")
     expressions='\n'.join(v['expression'] for v in policy['spec']['validations'])
     for required in (IMAGE,"model-release-traffic-v2","automountServiceAccountToken == true",
-                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit == quantity('32Mi')",
-                     "envFrom","imagePullSecrets","resources.limits.memory == quantity('256Mi')"):
+                     "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']","sizeLimit.orValue(quantity('0')) == quantity('32Mi')",
+                     "envFrom","imagePullSecrets","resources.limits.memory.orValue(quantity('0')) == quantity('256Mi')"):
         assert required in expressions
     assert binding_policy['spec']['validationActions']==['Deny']
     assert binding_policy['spec']['matchResources']['namespaceSelector']['matchLabels']=={
@@ -272,3 +272,11 @@ def test_budget_exhaustion_observes_terminal_and_wrong_baseline_blocks(tmp_path)
     client.state.side_effect=None;client.state.return_value=altered;client.send.reset_mock();clock=Clock()
     result=execute(cfg,payload(),client,Evidence(tmp_path/'baseline'),clock,clock.sleep)
     assert result['outcome']=='BLOCKED';client.send.assert_not_called()
+
+def test_admission_policy_uses_optional_cel_for_optional_resource_fields():
+    objects=proposed_rbac(IMAGE)['items']
+    policy=next(o for o in objects if o['kind']=='ValidatingAdmissionPolicy')
+    expressions=' '.join(v['expression'] for v in policy['spec']['validations'])
+    assert ".?resources.requests.cpu.orValue(quantity('0'))" in expressions
+    assert ".?resources.limits.memory.orValue(quantity('0'))" in expressions
+    assert ".?emptyDir.sizeLimit.orValue(quantity('0'))" in expressions
