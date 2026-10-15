@@ -52,8 +52,6 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    env:
-      RELEASE_STATE_READER_SNAPSHOT: ${{ runner.temp }}/oidc-k8s-reader-probe-${{ github.run_id }}.json
     steps:
       - uses: actions/checkout@v7
         with:
@@ -70,6 +68,8 @@ jobs:
           role-duration-seconds: 900
       - name: Verify live scoped Kubernetes API GET
         shell: bash
+        env:
+          RELEASE_STATE_READER_SNAPSHOT: ${{ runner.temp }}/oidc-k8s-reader-probe-${{ github.run_id }}-${{ github.run_attempt }}.json
         run: |
           set -euo pipefail
           trap 'rm -f -- "$RELEASE_STATE_READER_SNAPSHOT"' EXIT

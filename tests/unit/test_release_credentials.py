@@ -127,3 +127,34 @@ def test_k8s_oidc_probe_separates_token_generation_from_live_api_get():
     reader_role = "arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader"
     assert reader_role in hosted_text and reader_role in live_text
     assert "RELEASE_STATE_READER_B64" not in path.read_text()
+    assert "RELEASE_STATE_READER_SNAPSHOT" not in live.get("env", {})
+    get_step = next(step for step in live["steps"]
+                    if step.get("name") == "Verify live scoped Kubernetes API GET")
+    snapshot = get_step["env"]["RELEASE_STATE_READER_SNAPSHOT"]
+    assert "${{ runner.temp }}" in snapshot and "${{ github.run_attempt }}" in snapshot
+
+
+@pytest.mark.parametrize("path,job_name,consumer", [
+    (".github/workflows/release.yml", "preflight",
+     "Read exact Release State through OIDC and scoped EKS RBAC"),
+    (".github/workflows/runtime-build-trigger.yml", "observe-and-dispatch",
+     "Read exact Release State through OIDC and scoped EKS RBAC"),
+])
+def test_snapshot_path_is_initialized_at_runtime_and_cleanup_is_fail_safe(path, job_name, consumer):
+    workflow = yaml.load(Path(path).read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"][job_name]
+    assert "runner.temp" not in json.dumps(job.get("env", {}))
+    steps = job["steps"]
+    init_index = next(i for i, step in enumerate(steps)
+                      if step.get("name") == "Initialize temporary Release State snapshot path")
+    consumer_index = next(i for i, step in enumerate(steps) if step.get("name") == consumer)
+    assert init_index < consumer_index
+    initialization = steps[init_index]["run"]
+    for runtime_name in ("RUNNER_TEMP", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_ENV"):
+        assert runtime_name in initialization
+    assert "token" not in initialization.lower()
+    cleanup = next(step for step in steps
+                   if step.get("name") == "Remove temporary non-secret Release State snapshot")
+    assert cleanup["if"] == "always()"
+    assert "${RELEASE_STATE_READER_SNAPSHOT:-}" in cleanup["run"]
+    assert "rm -f --" in cleanup["run"]
