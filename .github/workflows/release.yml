@@ -72,7 +72,6 @@ jobs:
       id-token: write
     env:
       GH_TOKEN: ${{ github.token }}
-      RELEASE_STATE_READER_SNAPSHOT: ${{ runner.temp }}/release-state-v2-${{ github.run_id }}.json
     steps:
       - uses: actions/checkout@v7
         with:
@@ -82,6 +81,12 @@ jobs:
         with:
           python-version: '3.12.14'
       - run: python -m pip install -r control_plane/requirements-v2.txt
+      - name: Initialize temporary Release State snapshot path
+        shell: bash
+        run: |
+          set -euo pipefail
+          snapshot_path="${RUNNER_TEMP}/release-state-v2-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
+          printf 'RELEASE_STATE_READER_SNAPSHOT=%s\n' "$snapshot_path" >> "$GITHUB_ENV"
       - name: Assume dedicated Kubernetes Release State Reader
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -102,7 +107,12 @@ jobs:
         run: python -m scripts.release_v2 preflight
       - name: Remove temporary non-secret Release State snapshot
         if: always()
-        run: rm -f -- "$RELEASE_STATE_READER_SNAPSHOT"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${RELEASE_STATE_READER_SNAPSHOT:-}" ]]; then
+            rm -f -- "$RELEASE_STATE_READER_SNAPSHOT"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:
