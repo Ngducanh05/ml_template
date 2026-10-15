@@ -196,6 +196,14 @@ def test_release_workflow_has_no_approval_or_serving_bypass():
             assert 'kubectl' not in step.get('run','')
             assert 'scripts/release.py deploy' not in step.get('run','')
             assert 'docker/build-push-action' not in step.get('uses','')
+    preflight=json.dumps(w['jobs']['preflight'])
+    assert 'RELEASE_STATE_READER_B64' not in preflight
+    reader_role='arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader'
+    assert reader_role in preflight and 'RELEASE_CATALOG_READ_ROLE_ARN' in preflight
+    assert preflight.index(reader_role) < preflight.index('RELEASE_CATALOG_READ_ROLE_ARN')
+    assert 'control_plane.oidc_eks_reader' in preflight
+    production=json.dumps(w['jobs']['production'])
+    assert 'RELEASE_STATE_WRITER_B64' in production and reader_role not in production
     assert 'scripts.release_v2 source' in str(w['jobs']['validation'])
     assert 'scripts.release_v2 preflight' in str(w['jobs']['preflight'])
     assert 'scripts.release_v2 authorize' in str(w['jobs']['production'])

@@ -16,6 +16,7 @@ from . import release as legacy
 from .runtime_ci import require_clean_scan, verify_registry_image
 from control_plane.authorization_v2 import (source, ticket, snapshot, evidence, digest, authorize, REPOSITORY, WORKFLOW)
 from control_plane.authorization_backend import AuthorizationBackend
+from control_plane.oidc_eks_reader import snapshot_store
 from control_plane.state_v2 import Store
 from control_plane.runtime_catalog import Catalog
 from control_plane.build_contract import validate_request
@@ -72,9 +73,10 @@ def verify_human_review(run,reviews,expected):
 
 
 def state_store(writable=False):
-    key='RELEASE_STATE_WRITER_B64' if writable else 'RELEASE_STATE_READER_B64'
-    config=json.loads(base64.b64decode(legacy.env(key),validate=True))
-    return Store(AuthorizationBackend(config,writable=writable))
+    if not writable:
+        return snapshot_store()
+    config=json.loads(base64.b64decode(legacy.env('RELEASE_STATE_WRITER_B64'),validate=True))
+    return Store(AuthorizationBackend(config,writable=True))
 
 
 def catalog():

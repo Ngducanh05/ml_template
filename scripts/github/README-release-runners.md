@@ -22,9 +22,10 @@ request workflows from targeting either label.
 3. Generate a short-lived repository runner registration token immediately
    before each host starts. Do not store it in source, user data, logs, or a
    long-lived secret.
-4. Resolve the Kubernetes credential lifecycle blocker first. The reader may
-   only `get` `ConfigMap/production/model-release-state-v2`; the authorizer may
-   only `get,update` that exact object. Do not install an admin kubeconfig.
+4. Configure the readonly workflow to assume the dedicated OIDC IAM Reader.
+   It may only `get` `ConfigMap/production/model-release-state-v2`; the
+   authorizer may only `get,update` that exact object. Do not install an admin
+   kubeconfig. See `docs/oidc-eks-reader-operator.md`.
 
 Run on each freshly provisioned host, replacing the example version and hash
 with the independently verified official values:
@@ -60,34 +61,30 @@ persistent read-only runner.
 
 No runner is ready until every check above has live evidence.
 
-## Just-in-time Kubernetes credentials
+## Kubernetes credentials
 
-Run credential rotation only from an approved operator workstation that already
-has access to the EKS control-plane API. The helper requests a bounded token,
-checks its actual JWT expiry and identity, reads the exact v2 state through the
-same backend used by Release, and uses SelfSubjectAccessReview to prove the
-expected allow/deny matrix. It never prints the token or encoded credential.
+The read-only path obtains a fresh EKS token from the dedicated GitHub OIDC IAM
+Reader in every job. It verifies the exact STS role, cluster ARN, endpoint, CA,
+state object and schema, and never stores the token. `RELEASE_STATE_READER_B64`
+is not used by the scheduled trigger or Release preflight.
+
+The writer remains operator-rotated and protected by the `production`
+Environment. Run writer rotation only from an approved operator workstation
+that already has access to the EKS control-plane API:
 
 ```bash
-python -m scripts.github.rotate_release_state_credential --role reader
-python -m scripts.github.rotate_release_state_credential --role reader --store
 python -m scripts.github.rotate_release_state_credential --role writer
 python -m scripts.github.rotate_release_state_credential \
   --role writer --store --confirm-writer-rotation
 ```
 
-The reader is a repository secret and should be minted immediately before a
-preflight or scheduled-observer window. The writer is a `production`
-Environment secret; rotate it immediately before the independent reviewer
-approves the protected job. The default requested lifetime is one hour and the
-helper refuses less than 30 minutes remaining. A delayed approval must receive
-a fresh writer credential before approval; an expired token fails closed at the
-Kubernetes API. TokenRequest tokens are not individually revocable, so normal
-revocation is expiry plus rotation. Emergency ServiceAccount/RBAC removal is a
-separate reviewed cluster operation.
+The writer is a `production` Environment secret; rotate it immediately before
+the independent reviewer approves the protected job. A delayed approval must
+receive a fresh writer credential before approval; an expired token fails
+closed at the Kubernetes API.
 
-Never paste either value into a command line, file, log, artifact, or chat. The
-helper passes the value to `gh secret set` through standard input. Writer
+Never paste the writer value into a command line, file, log, artifact, or chat.
+The helper passes it to `gh secret set` through standard input. Writer
 replacement requires the explicit confirmation flag because an existing
 protected Environment secret may still be in use.
 

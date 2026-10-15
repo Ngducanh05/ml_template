@@ -2,6 +2,12 @@ name: OIDC EKS Reader Probe
 
 on:
   workflow_dispatch:
+    inputs:
+      live_get:
+        description: Also run the scoped Kubernetes API GET on the approved readonly runner
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -16,6 +22,13 @@ jobs:
       id-token: write
 
     steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - run: python -m pip install -r control_plane/requirements-v2.txt
       - name: Assume dedicated Kubernetes Reader
         uses: aws-actions/configure-aws-credentials@v5
         with:
@@ -23,19 +36,42 @@ jobs:
           aws-region: ap-southeast-1
           role-duration-seconds: 900
 
-      - name: Verify identity and token generation
+      - name: Verify identity, DescribeCluster and token generation
         shell: bash
         run: |
           set -euo pipefail
+          python -m control_plane.oidc_eks_reader --verify-only
 
-          identity="$(aws sts get-caller-identity --query Arn --output text)"
-
-          [[ "$identity" == arn:aws:sts::596432515999:assumed-role/ml-template-v2-k8s-reader/* ]]
-
-          aws eks get-token \
-            --cluster-name ml-template-dev-sg \
-            --region ap-southeast-1 \
-            --output json |
-            python3 -c 'import json,sys; p=json.load(sys.stdin); assert p["kind"] == "ExecCredential"; assert p["status"]["token"].startswith("k8s-aws-v1."); print("OIDC_K8S_TOKEN_GENERATION_PASS")'
-
-          echo "OIDC_K8S_READER_STS_PASS"
+  live-get:
+    if: >-
+      github.repository == 'Ngducanh05/ml_template' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.live_get
+    runs-on: [self-hosted, Linux, X64, mlops-release-readonly]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RELEASE_STATE_READER_SNAPSHOT: ${{ runner.temp }}/oidc-k8s-reader-probe-${{ github.run_id }}.json
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+      - name: Assume dedicated Kubernetes Reader
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - name: Verify live scoped Kubernetes API GET
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'rm -f -- "$RELEASE_STATE_READER_SNAPSHOT"' EXIT
+          python -m control_plane.oidc_eks_reader \
+            --output "$RELEASE_STATE_READER_SNAPSHOT"
