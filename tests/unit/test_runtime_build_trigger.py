@@ -109,7 +109,11 @@ def test_workflow_uses_scoped_github_side_trigger_and_existing_builder():
     assert job["runs-on"] == ["self-hosted", "Linux", "X64", "mlops-release-readonly"]
     assert job["permissions"] == {"contents": "read", "actions": "write", "id-token": "write"}
     text = json.dumps(job)
-    assert "RELEASE_STATE_READER_B64" in text and "RELEASE_STATE_WRITER_B64" not in text
+    assert "RELEASE_STATE_READER_B64" not in text and "RELEASE_STATE_WRITER_B64" not in text
+    reader_role = "arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader"
+    assert reader_role in text and "RELEASE_CATALOG_READ_ROLE_ARN" in text
+    assert text.index(reader_role) < text.index("RELEASE_CATALOG_READ_ROLE_ARN")
+    assert "control_plane.oidc_eks_reader" in text
     assert "RUNTIME_BUILD_ROLE_ARN" not in text and "runtime-build.yml" not in text
     build = yaml.load(open(".github/workflows/runtime-build.yml"), Loader=yaml.BaseLoader)
     assert "fromJSON(inputs.technical_contract).fingerprint" in build["run-name"]

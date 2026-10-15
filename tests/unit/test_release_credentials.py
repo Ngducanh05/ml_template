@@ -110,3 +110,20 @@ def test_catalog_reader_trust_uses_only_exact_immutable_subjects():
         "repo:Ngducanh05@209518583/ml_template@1375284682:ref:refs/tags/v*",
         "repo:Ngducanh05@209518583/ml_template@1375284682:environment:production",
     }
+
+
+def test_k8s_oidc_probe_separates_token_generation_from_live_api_get():
+    path = Path(".github/workflows/oidc-k8s-reader-probe.yml")
+    workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+    assert workflow["on"]["workflow_dispatch"]["inputs"]["live_get"]["default"] == "false"
+    hosted = workflow["jobs"]["probe"]
+    live = workflow["jobs"]["live-get"]
+    assert hosted["runs-on"] == "ubuntu-latest"
+    assert live["runs-on"] == ["self-hosted", "Linux", "X64", "mlops-release-readonly"]
+    hosted_text = json.dumps(hosted)
+    live_text = json.dumps(live)
+    assert "--verify-only" in hosted_text and "--output" not in hosted_text
+    assert "--output" in live_text and "OIDC_KUBERNETES_API_GET_PASS" not in path.read_text()
+    reader_role = "arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader"
+    assert reader_role in hosted_text and reader_role in live_text
+    assert "RELEASE_STATE_READER_B64" not in path.read_text()

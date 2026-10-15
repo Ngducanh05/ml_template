@@ -9,14 +9,13 @@ Security or infrastructure failure cannot become a build loop.
 """
 from __future__ import annotations
 
-import base64
 import json
 import os
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from control_plane.authorization_backend import AuthorizationBackend
 from control_plane.build_contract import validate_request
+from control_plane.oidc_eks_reader import snapshot_store
 from control_plane.runtime_catalog import Catalog
 from control_plane.state_v2 import Store
 
@@ -146,13 +145,7 @@ def workflow_runs():
 
 
 def state_store():
-    encoded = os.environ.get("RELEASE_STATE_READER_B64", "")
-    require(len(encoded) <= 131072, "Release reader configuration exceeds bound")
-    try:
-        config = json.loads(base64.b64decode(encoded, validate=True))
-    except Exception as exc:
-        raise ValueError("Invalid release reader configuration") from exc
-    return Store(AuthorizationBackend(config))
+    return snapshot_store()
 
 
 def catalog():
