@@ -120,9 +120,9 @@ def test_proposed_rbac_is_namespaced_and_generator_is_admission_constrained():
     expressions='\n'.join(v['expression'] for v in policy['spec']['validations'])
     for required in (IMAGE,"model-release-traffic-v2","automountServiceAccountToken == true",
                      "readOnlyRootFilesystem == true","capabilities.drop == ['ALL']",
-                     "dyn(object.spec.template.spec.volumes[0].emptyDir).sizeLimit == quantity('32Mi')",
+                     "quantity(dyn(object.spec.template.spec.volumes[0].emptyDir).sizeLimit) == quantity('32Mi')",
                      "envFrom","imagePullSecrets",
-                     "dyn(object.spec.template.spec.containers[0].resources).limits['memory'] == quantity('256Mi')"):
+                     "quantity(dyn(object.spec.template.spec.containers[0].resources).limits['memory']) == quantity('256Mi')"):
         assert required in expressions
     assert binding_policy['spec']['validationActions']==['Deny']
     assert binding_policy['spec']['matchResources']['namespaceSelector']['matchLabels']=={
@@ -279,11 +279,11 @@ def test_admission_policy_casts_quantity_bearing_structs_to_dynamic_access():
     objects=proposed_rbac(IMAGE)['items']
     policy=next(o for o in objects if o['kind']=='ValidatingAdmissionPolicy')
     expressions=' '.join(v['expression'] for v in policy['spec']['validations'])
-    for required in ("dyn(object.spec.template.spec.containers[0].resources).requests['cpu'] == quantity('50m')",
-                     "dyn(object.spec.template.spec.containers[0].resources).requests['memory'] == quantity('64Mi')",
-                     "dyn(object.spec.template.spec.containers[0].resources).limits['cpu'] == quantity('500m')",
-                     "dyn(object.spec.template.spec.containers[0].resources).limits['memory'] == quantity('256Mi')",
-                     "dyn(object.spec.template.spec.volumes[0].emptyDir).sizeLimit == quantity('32Mi')"):
+    for required in ("quantity(dyn(object.spec.template.spec.containers[0].resources).requests['cpu']) == quantity('50m')",
+                     "quantity(dyn(object.spec.template.spec.containers[0].resources).requests['memory']) == quantity('64Mi')",
+                     "quantity(dyn(object.spec.template.spec.containers[0].resources).limits['cpu']) == quantity('500m')",
+                     "quantity(dyn(object.spec.template.spec.containers[0].resources).limits['memory']) == quantity('256Mi')",
+                     "quantity(dyn(object.spec.template.spec.volumes[0].emptyDir).sizeLimit) == quantity('32Mi')"):
         assert required in expressions
     assert '.?resources' not in expressions and '.?emptyDir' not in expressions
     assert 'has(object.spec.template.spec.containers[0].resources.requests)' not in expressions
