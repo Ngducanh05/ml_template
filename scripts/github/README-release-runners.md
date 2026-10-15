@@ -59,3 +59,39 @@ persistent read-only runner.
   no administrator bypass, and only the `v*` deployment tag policy.
 
 No runner is ready until every check above has live evidence.
+
+## Just-in-time Kubernetes credentials
+
+Run credential rotation only from an approved operator workstation that already
+has access to the EKS control-plane API. The helper requests a bounded token,
+checks its actual JWT expiry and identity, reads the exact v2 state through the
+same backend used by Release, and uses SelfSubjectAccessReview to prove the
+expected allow/deny matrix. It never prints the token or encoded credential.
+
+```bash
+python -m scripts.github.rotate_release_state_credential --role reader
+python -m scripts.github.rotate_release_state_credential --role reader --store
+python -m scripts.github.rotate_release_state_credential --role writer
+python -m scripts.github.rotate_release_state_credential \
+  --role writer --store --confirm-writer-rotation
+```
+
+The reader is a repository secret and should be minted immediately before a
+preflight or scheduled-observer window. The writer is a `production`
+Environment secret; rotate it immediately before the independent reviewer
+approves the protected job. The default requested lifetime is one hour and the
+helper refuses less than 30 minutes remaining. A delayed approval must receive
+a fresh writer credential before approval; an expired token fails closed at the
+Kubernetes API. TokenRequest tokens are not individually revocable, so normal
+revocation is expiry plus rotation. Emergency ServiceAccount/RBAC removal is a
+separate reviewed cluster operation.
+
+Never paste either value into a command line, file, log, artifact, or chat. The
+helper passes the value to `gh secret set` through standard input. Writer
+replacement requires the explicit confirmation flag because an existing
+protected Environment secret may still be in use.
+
+Before bringing the read-only runner online, cancel or otherwise disposition
+all old queued runs. The scheduled observer requires a dedicated persistent
+read-only host or a separately reviewed ephemeral-runner controller. The
+authorizer remains one-shot and offline outside an approved release window.

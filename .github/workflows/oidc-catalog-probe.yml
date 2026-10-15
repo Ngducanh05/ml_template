@@ -1,0 +1,37 @@
+name: OIDC catalog read probe
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    if: github.repository == 'Ngducanh05/ml_template' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ vars.RELEASE_CATALOG_READ_ROLE_ARN }}
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+      - name: Verify exact account, role and read-only catalog operations
+        shell: bash
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          arn="$(aws sts get-caller-identity --query Arn --output text)"
+          [[ "$account" == "596432515999" ]]
+          [[ "$arn" =~ ^arn:aws:sts::596432515999:assumed-role/ml-template-v2-catalog-reader/ ]]
+          aws ecr describe-repositories --repository-names model-service \
+            --query 'repositories[0].repositoryName' --output text | grep -Fx model-service
+          digest="$(aws ecr describe-images --repository-name model-service \
+            --query 'sort_by(imageDetails,& imagePushedAt)[-1].imageDigest' --output text)"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          fetched="$(aws ecr batch-get-image --repository-name model-service \
+            --image-ids imageDigest="$digest" \
+            --query 'images[0].imageId.imageDigest' --output text)"
+          [[ "$fetched" == "$digest" ]]
+          printf 'OIDC_STS_ECR_READ_PASS account=%s role=ml-template-v2-catalog-reader repository=model-service\n' "$account"
