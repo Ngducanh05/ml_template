@@ -1,6 +1,8 @@
 """V2 stages of the original Release workflow; no serving or traffic mutations."""
 import argparse
 import base64
+import copy
+from datetime import datetime, timezone
 import hashlib
 import io
 import json
@@ -121,6 +123,11 @@ def artifact_files(run_id,name,filenames):
 # Operator-provisioned, read-only authority store, OUTSIDE checkout/artifact inputs.
 # No records are installed by this implementation. See the runbook trust boundary.
 PROVENANCE_ROOT=Path('/etc/mlops/release/runtime-provenance')
+APPROVAL_FIELDS={'record_digest','authority','approval_reference','approved_at','expires_at',
+                 'risk_acceptance_expires_at','status'}
+E2E_EXCEPTION_FIELDS={'kind','model_version','runtime_digest','fingerprint','release_reference','status'}
+V11_E2E_IMAGE='596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:f1ae0d6c95d19b73adbfa72ae183ef6f207a2dc647bc2d4a1a36386a02ba5ae0'
+V11_E2E_FINGERPRINT='sha256:700096f6d55f8aa9b56c9049e1c4171633f403a8d3e2a2de2df1ff544eab63fc'
 
 
 def provenance_file(path,limit):
@@ -144,8 +151,8 @@ def retained_provenance(record_digest,now):
     hits=[r for r in index['records'] if r.get('record_digest')==record_digest]
     legacy.require(len(hits)==1,'Runtime provenance absent or ambiguous')
     approval=hits[0]
-    legacy.require(set(approval)=={'record_digest','authority','approval_reference','approved_at','expires_at',
-                                  'risk_acceptance_expires_at','status'},'Invalid provenance approval')
+    legacy.require(set(approval) in (APPROVAL_FIELDS,APPROVAL_FIELDS|{'e2e_exception'}),
+                   'Invalid provenance approval')
     legacy.require(approval['status']=='approved','Runtime provenance revoked or unapproved')
     ticket(approval['authority']);ticket(approval['approval_reference'])
     legacy.require(_time(approval['approved_at']).timestamp()<=now<_time(approval['expires_at']).timestamp(),
@@ -155,6 +162,30 @@ def retained_provenance(record_digest,now):
     record=provenance_file(PROVENANCE_ROOT/(record_digest[7:]+'.json'),16*1024*1024)
     legacy.require(digest(record)==record_digest,'Runtime provenance content mismatch')
     return record,approval
+
+
+def current_security_decision(scan,request,now):
+    from control_plane.runtime_security import evaluate_scan,load_json
+    waivers=load_json(Path(__file__).resolve().parents[1]/'security/runtime-vulnerability-waivers.json')
+    return evaluate_scan(scan,request,waivers,now=datetime.fromtimestamp(now,timezone.utc))
+
+
+def validate_e2e_exception(approval,version,image,request,release_reference):
+    exception=approval.get('e2e_exception')
+    legacy.require(isinstance(exception,dict) and set(exception)==E2E_EXCEPTION_FIELDS,
+                   'Explicit E2E security exception required')
+    legacy.require(approval['risk_acceptance_expires_at'] is not None,
+                   'E2E security exception requires bounded risk acceptance')
+    ticket(release_reference)
+    legacy.require(version=='11' and image==V11_E2E_IMAGE and request['fingerprint']==V11_E2E_FINGERPRINT,
+                   'E2E security exception limited to exact model v11 runtime')
+    legacy.require(exception=={
+        'kind':'E2E_ONLY_SECURITY_EXCEPTION','model_version':version,'runtime_digest':image,
+        'fingerprint':request['fingerprint'],'release_reference':release_reference,'status':'approved'},
+        'E2E security exception scope mismatch')
+    return dict(copy.deepcopy(exception),authority=approval['authority'],
+        approval_reference=approval['approval_reference'],approved_at=approval['approved_at'],
+        expires_at=approval['expires_at'],risk_acceptance_expires_at=approval['risk_acceptance_expires_at'])
 
 
 def evidence_selection():
@@ -168,21 +199,36 @@ def evidence_selection():
     return kind,record
 
 
-def verify_retained_runtime(request,image,record_digest,cat):
-    record,approval=retained_provenance(record_digest,time.time())
+def verify_retained_runtime(request,image,record_digest,cat,*,version=None,release_reference=None):
+    now=time.time();record,approval=retained_provenance(record_digest,now)
     legacy.require(set(record)=={'schema_version','request','image','scan','security_decision','build_evidence','smoke_evidence'}
         and record['schema_version']==1,'Invalid retained runtime record')
     legacy.require(record['request']==request and record['image']==image,'Retained runtime contract/digest mismatch')
     for key in ('build_evidence','smoke_evidence'):
         legacy.require(isinstance(record[key],str) and re.fullmatch(r'sha256:[0-9a-f]{64}',record[key]),'Missing reviewed build/smoke evidence')
     scan=record['scan'];old=record['security_decision']
-    legacy.require(old.get('decision')=='PASS' and old.get('fingerprint')==request['fingerprint']
-        and old.get('image_id')==scan.get('Metadata',{}).get('ImageID'),'Retained security decision blocked/mismatched')
-    # Retention is not a security exception. Existing policy/waivers still apply now.
-    decision=require_clean_scan(scan,request)
+    legacy.require(old.get('fingerprint')==request['fingerprint']
+        and old.get('image_id')==scan.get('Metadata',{}).get('ImageID'),
+        'Retained security decision identity mismatch')
+    decision=current_security_decision(scan,request,now)
+    enforcement='SECURITY_PASS'
+    if decision.get('decision')=='PASS':
+        legacy.require(old.get('decision')=='PASS' and 'e2e_exception' not in approval,
+                       'Retained security decision mismatched/unnecessary exception')
+    else:
+        legacy.require(decision.get('decision')=='BLOCK' and not decision.get('errors')
+            and bool(decision.get('blocking_findings')) and old.get('decision')=='BLOCK',
+            'Malformed or unreviewed blocked security evidence')
+        exception=validate_e2e_exception(approval,version,image,request,release_reference)
+        enforcement=exception['kind']
+        decision=dict(decision,enforcement=enforcement,security_exception=exception,
+                      security_pass=False)
     legacy.require(cat.lookup(request['fingerprint'])==image,'Runtime catalog MISS/mismatch')
     verify_registry_image(image,scan,cat)
-    return digest(dict(record_digest=record_digest,approval=approval)),decision
+    stable_decision={k:v for k,v in decision.items() if k!='evaluated_at'}
+    proof=digest(dict(record_digest=record_digest,approval=approval,enforcement=enforcement,
+                      current_security_decision=digest(stable_decision)))
+    return proof,decision
 
 
 def verify_runtime(state,version,run_id,cat,*,evidence_source='workflow_run'):
@@ -191,7 +237,8 @@ def verify_runtime(state,version,run_id,cat,*,evidence_source='workflow_run'):
     request=item['build_request'];validate_request(request)
     legacy.require(request['fingerprint']==current['candidate']['fingerprint'],'Candidate technical request mismatch')
     if evidence_source=='retained_provenance':
-        return verify_retained_runtime(request,current['candidate']['pair']['runtime_digest'],run_id,cat)
+        return verify_retained_runtime(request,current['candidate']['pair']['runtime_digest'],run_id,cat,
+            version=version,release_reference=os.getenv('TICKET_REFERENCE'))
     legacy.require(evidence_source=='workflow_run','Unknown runtime evidence source')
     legacy.require(re.fullmatch(r'[1-9][0-9]{0,19}',run_id),'Invalid runtime workflow run')
     run=legacy.github_json(f'actions/runs/{run_id}')
@@ -224,7 +271,9 @@ def preflight():
     write('candidate.json',candidate)
     write('security-decision.json',decision)
     write('preflight.json',dict(outcome='AWAITING_HUMAN_APPROVAL',ticket_validation='reference_only_human_must_verify',
-        staging_inference='NOT_PERFORMED',settings=settings,runtime_evidence_source=kind,checks='canonical candidate, idle durable stable baseline, runtime build/smoke/security evidence, immutable catalog identity',evidence_hash=digest(candidate)))
+        staging_inference='NOT_PERFORMED',settings=settings,runtime_evidence_source=kind,
+        security_enforcement=decision.get('enforcement',decision['decision']),
+        checks='canonical candidate, idle durable stable baseline, runtime build/smoke/security evidence, immutable catalog identity',evidence_hash=digest(candidate)))
 
 
 def authorize_release():

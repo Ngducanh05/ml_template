@@ -322,6 +322,91 @@ def retained_fixture(monkeypatch,s):
     return state,cat,record,approval,index
 
 
+V11_IMAGE='596432515999.dkr.ecr.ap-southeast-1.amazonaws.com/model-service@sha256:f1ae0d6c95d19b73adbfa72ae183ef6f207a2dc647bc2d4a1a36386a02ba5ae0'
+V11_FP='sha256:700096f6d55f8aa9b56c9049e1c4171633f403a8d3e2a2de2df1ff544eab63fc'
+V11_RELEASE='E2E-V11-2026-10'
+
+
+def v11_retained_exception_fixture(monkeypatch,version='11'):
+    _,s,_,_,_=setup(False)
+    request=dict(schema_version=1,fingerprint=V11_FP,python_version='3.12.14',
+        requirements=['mlflow==3.14.0','numpy==2.5.3','pandas==2.3.3','scikit-learn==1.7.2',
+                      'scipy==1.18.1','skops==0.16.0'],
+        runtime_profile=dict(mlserver_version='1.7.1',mlserver_mlflow_version='1.7.1',
+            platform='linux/amd64',build_profile='runtime-x-hardened-v1',
+            serving_profile='mlserver-v2-parallel-workers-0'))
+    def candidate(state):
+        item=state['pending'][0];artifact=event(int(version))['artifact_uri']
+        item['event'].update(model_version=version,artifact_uri=artifact,run_id=f'run-{version}')
+        item.update(fingerprint=V11_FP,build_request=request,
+            pair=dict(model_version=version,runtime_digest=V11_IMAGE,storage_uri=artifact))
+        state['highest_accepted']=int(version)
+        state['identities']=[dict(model_name='credit-risk-classifier',model_version=version,
+                                  artifact_uri=artifact,run_id=f'run-{version}')]
+    s.update(candidate)
+    state,cat,scan,_=runtime_fixture(monkeypatch,s)
+    scan['Results'][0]['Vulnerabilities']=[dict(VulnerabilityID='CVE-2026-64849',PkgName='mlflow',
+        InstalledVersion='3.14.0',FixedVersion='3.15.0',Severity='CRITICAL')]
+    item=state['pending'][0]
+    record=dict(schema_version=1,request=item['build_request'],image=item['pair']['runtime_digest'],scan=scan,
+        security_decision=dict(decision='BLOCK',fingerprint=item['fingerprint'],image_id=scan['Metadata']['ImageID']),
+        build_evidence='sha256:'+'b'*64,smoke_evidence='sha256:'+'c'*64)
+    approval=dict(record_digest=digest(record),authority='security-reviewer',approval_reference='SEC-E2E-11',
+        approved_at='2026-10-01T00:00:00Z',expires_at='2026-10-31T00:00:00Z',
+        risk_acceptance_expires_at='2026-10-20T00:00:00Z',status='approved',
+        e2e_exception=dict(kind='E2E_ONLY_SECURITY_EXCEPTION',model_version='11',runtime_digest=V11_IMAGE,
+            fingerprint=V11_FP,release_reference=V11_RELEASE,status='approved'))
+    index=dict(schema_version=1,records=[approval])
+    monkeypatch.setattr(release,'provenance_file',lambda path,limit:index if path.name=='approvals.json' else record)
+    monkeypatch.setattr(release.time,'time',lambda:1792137600)  # 2026-10-16T00:00:00Z
+    monkeypatch.setenv('TICKET_REFERENCE',V11_RELEASE)
+    cat.lookup.return_value=V11_IMAGE
+    cat.ecr.batch_get_image.return_value={'images':[{'imageId':{'imageDigest':V11_IMAGE.split('@')[1]},
+        'imageManifest':json.dumps({'config':{'digest':scan['Metadata']['ImageID']}})}]}
+    return s,state,cat,record,approval,index
+
+
+def test_v11_exact_retained_block_can_use_bounded_e2e_exception(monkeypatch):
+    s,state,cat,record,approval,_=v11_retained_exception_fixture(monkeypatch)
+    proof,decision=release.verify_runtime(state,'11',approval['record_digest'],cat,
+                                          evidence_source='retained_provenance')
+    assert DIGEST.fullmatch(proof)
+    assert decision['decision']=='BLOCK' and decision['security_pass'] is False
+    assert decision['enforcement']=='E2E_ONLY_SECURITY_EXCEPTION'
+    assert decision['counts']['raw']['CRITICAL']==1 and len(decision['blocking_findings'])==1
+    assert decision['security_exception']['model_version']=='11'
+    assert decision['security_exception']['approval_reference']=='SEC-E2E-11'
+    assert decision['security_exception']['risk_acceptance_expires_at']=='2026-10-20T00:00:00Z'
+    rechecked,_=release.verify_runtime(state,'11',approval['record_digest'],cat,
+                                        evidence_source='retained_provenance')
+    assert rechecked==proof  # Preflight/Authorize recheck binds the same stable evidence.
+    assert s.read()['active'] is None and 'authorization' not in s.read()['pending'][0]
+
+
+@pytest.mark.parametrize('field,value',[('runtime_digest',V11_IMAGE.replace('f1ae0','f1ae1')),
+                                         ('fingerprint','sha256:'+'f'*64)])
+def test_v11_e2e_exception_wrong_runtime_identity_blocks(monkeypatch,field,value):
+    _,state,cat,_,approval,_=v11_retained_exception_fixture(monkeypatch)
+    approval['e2e_exception'][field]=value
+    with pytest.raises(ValueError,match='scope mismatch'):
+        release.verify_runtime(state,'11',approval['record_digest'],cat,evidence_source='retained_provenance')
+
+
+def test_v12_cannot_reuse_v11_e2e_exception(monkeypatch):
+    _,state,cat,_,approval,_=v11_retained_exception_fixture(monkeypatch,version='12')
+    with pytest.raises(ValueError,match='limited to exact model v11 runtime'):
+        release.verify_runtime(state,'12',approval['record_digest'],cat,evidence_source='retained_provenance')
+
+
+@pytest.mark.parametrize('case',['expired','not-approved'])
+def test_v11_e2e_exception_expired_or_unapproved_blocks(monkeypatch,case):
+    _,state,cat,_,approval,_=v11_retained_exception_fixture(monkeypatch)
+    if case=='expired':approval['risk_acceptance_expires_at']='2026-10-15T00:00:00Z'
+    else:approval['e2e_exception']['status']='pending'
+    with pytest.raises(ValueError):
+        release.verify_runtime(state,'11',approval['record_digest'],cat,evidence_source='retained_provenance')
+
+
 def test_retained_reuse_valid_contract_scan_authority_no_build(monkeypatch):
     _,s,_,_,_=setup(False);state,cat,record,approval,_=retained_fixture(monkeypatch,s)
     release.legacy.command.reset_mock();release.legacy.github_json.reset_mock()
