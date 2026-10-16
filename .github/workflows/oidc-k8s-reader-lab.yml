@@ -1,0 +1,43 @@
+name: OIDC EKS Reader Lab GET
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lab-get:
+    if: github.repository == 'Ngducanh05/ml_template' && github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, Linux, X64, mlops-oidc-reader-lab]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12.14'
+
+      - run: python -m pip install -r control_plane/requirements-v2.txt
+
+      - name: Assume dedicated Kubernetes Reader
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::596432515999:role/ml-template-v2-k8s-reader
+          aws-region: ap-southeast-1
+          role-duration-seconds: 900
+
+      - name: Verify scoped Kubernetes Live GET
+        shell: bash
+        env:
+          RELEASE_STATE_READER_SNAPSHOT: ${{ runner.temp }}/oidc-reader-lab-${{ github.run_id }}-${{ github.run_attempt }}.json
+        run: |
+          set -euo pipefail
+          trap 'rm -f -- "$RELEASE_STATE_READER_SNAPSHOT"' EXIT
+          python -m control_plane.oidc_eks_reader --output "$RELEASE_STATE_READER_SNAPSHOT"
